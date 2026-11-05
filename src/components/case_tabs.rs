@@ -1,6 +1,5 @@
 use leptos::prelude::*;
 
-/// A section of the staff case page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaseTab {
     Overview,
@@ -59,9 +58,7 @@ impl CaseTab {
         }
     }
 
-    /// The folder this tab opens in the case's document browser, relative to
-    /// the case folder; `Some("")` is the case folder itself. Names match
-    /// `NEW_CASE_FOLDERS`.
+    /// Folder this tab opens, relative to the case folder; `Some("")` is the case folder itself.
     pub fn folder(self) -> Option<&'static str> {
         match self {
             CaseTab::Intake => Some("Intake"),
@@ -84,8 +81,6 @@ impl CaseTab {
     }
 }
 
-/// The tab row above the case sections, following the WAI-ARIA tabs pattern:
-/// only the selected tab is in the tab order, and arrow keys move between tabs.
 #[component]
 pub fn CaseTabBar(
     tabs: Vec<CaseTab>,
@@ -139,9 +134,9 @@ pub fn CaseTabBar(
                         on:click=move |_| on_select.run(tab)
                         class=move || {
                             if selected() {
-                                "whitespace-nowrap rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-semibold text-slate-100"
+                                "whitespace-nowrap rounded-full bg-primary-50 px-4 py-2 text-sm font-semibold text-primary-700 ring-1 ring-inset ring-primary-400/40"
                             } else {
-                                "whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium text-slate-400 hover:bg-slate-800/60 hover:text-slate-200"
+                                "whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold text-slate-400 hover:bg-slate-950 hover:text-slate-200"
                             }
                         }
                     >
@@ -157,7 +152,7 @@ pub fn CaseTabBar(
             role="tablist"
             aria-label="Case sections"
             on:keydown=on_keydown
-            class="flex gap-1 overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/60 p-1"
+            class="flex gap-1 overflow-x-auto rounded-full border border-slate-800 bg-slate-900 p-1.5"
         >
             {buttons}
         </div>

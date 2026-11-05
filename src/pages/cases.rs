@@ -197,7 +197,7 @@ pub fn CaseHomePage() -> impl IntoView {
     // relative to the case folder. Kept here so it survives the reload every
     // case mutation triggers.
     let open_folder = RwSignal::new(String::new());
-    // The open case's tab, kept here for the same reason as `open_folder`.
+    // Kept here so the open tab survives CaseDetail remounting on reload.
     let tab = RwSignal::new(CaseTab::Overview);
 
     // The fetched window of case summaries plus the total match count. `query`
@@ -2095,7 +2095,6 @@ pub fn CaseDetail(
         view! { <p class="px-1 text-sm text-slate-400">{text}</p> }
     };
 
-    // Clients keep the single-page layout; the tabs organize staff work.
     let sections = if is_client {
         view! {
             {documents_panel}
