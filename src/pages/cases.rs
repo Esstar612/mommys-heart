@@ -154,8 +154,31 @@ async fn upload_document_file(
         .map_err(crate::server_fns::err_text)
 }
 
-fn badge(classes: &str) -> String {
-    format!("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {classes}")
+fn status_pill(status: CaseStatus) -> impl IntoView {
+    let icon = match status {
+        CaseStatus::Open => view! {
+            <svg viewBox="0 0 16 16" class="h-2 w-2" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"></circle></svg>
+        }
+        .into_any(),
+        CaseStatus::Closed => view! {
+            <svg viewBox="0 0 24 24" class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="3.5" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg>
+        }
+        .into_any(),
+        CaseStatus::Declined | CaseStatus::Withdrawn => view! {
+            <svg viewBox="0 0 24 24" class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="3.5" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        }
+        .into_any(),
+        CaseStatus::PendingReview | CaseStatus::Monitor => view! {
+            <svg viewBox="0 0 24 24" class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+        }
+        .into_any(),
+    };
+    view! {
+        <span class=format!("inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium {}", status.badge_classes())>
+            {icon}
+            {status.label()}
+        </span>
+    }
 }
 
 /// A short label summarizing a user's access to a case from their capabilities.
@@ -294,7 +317,7 @@ pub fn CaseHomePage() -> impl IntoView {
                             if is_selected.get() { "block truncate font-bold" } else { "block truncate font-semibold" }
                         }>{name}</span>
                         <span class="mt-1.5 flex items-center gap-2">
-                            <span class=badge(status.badge_classes())>{status.label()}</span>
+                            {status_pill(status)}
                             <span class="min-w-0 truncate text-sm text-slate-500" title=owner_title>{owner}</span>
                         </span>
                         {inactive.then(|| view! {
@@ -1626,13 +1649,17 @@ pub fn CaseDetail(
                 }
                 .into_any()
             } else if can_manage_case_information {
+                let header_button = "shrink-0 rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-950";
                 view! {
-                    <button
-                        on:click=begin_edit
-                        class="shrink-0 rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-950"
-                    >
-                        "Edit case"
-                    </button>
+                    <div class="flex flex-wrap gap-2">
+                        {has_operations_admin_permissions.then(|| view! {
+                            <A href="/admin/users" attr:class=header_button>"Case access"</A>
+                        })}
+                        {is_site_admin.then(|| view! {
+                            <button on:click=begin_edit class=header_button>"Reassign"</button>
+                        })}
+                        <button on:click=begin_edit class=header_button>"Edit case"</button>
+                    </div>
                 }
                 .into_any()
             } else {
@@ -1770,7 +1797,7 @@ pub fn CaseDetail(
                     <div class="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
                         <div class="min-w-0">
                             <p class="flex flex-wrap items-center gap-2">
-                                <span class=badge(status.badge_classes())>{status.label()}</span>
+                                {status_pill(status)}
                                 <span class="text-sm text-slate-500">
                                     "Filed by "
                                     <ProfileLink user_id=c.owner_id.clone() name=owner_name />
