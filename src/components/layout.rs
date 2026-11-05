@@ -169,20 +169,20 @@ pub fn Layout(#[prop(into)] title: String, children: Children) -> impl IntoView 
                             </div>
                             <A
                                 href=my_profile_href.clone()
-                                attr:class="hidden sm:inline-flex whitespace-nowrap rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800 hover:text-slate-100 transition-colors"
+                                attr:class="hidden sm:inline-flex whitespace-nowrap rounded-full border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800 hover:text-slate-100 transition-colors"
                             >
                                 "My Profile"
                             </A>
                             <button
                                 on:click=logout
-                                class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium whitespace-nowrap text-slate-300 hover:bg-slate-800 hover:text-slate-100 transition-colors"
+                                class="rounded-full border border-slate-700 px-3 py-1.5 text-sm font-medium whitespace-nowrap text-slate-300 hover:bg-slate-800 hover:text-slate-100 transition-colors"
                             >
                                 "Log out"
                             </button>
                             <button
                                 on:click=toggle_menu
                                 aria-label="Toggle navigation menu"
-                                class="xl:hidden grid h-9 w-9 place-items-center rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100 transition-colors"
+                                class="xl:hidden grid h-9 w-9 place-items-center rounded-full border border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100 transition-colors"
                             >
                                 {move || if menu_open.get() { "\u{2715}" } else { "\u{2630}" }}
                             </button>

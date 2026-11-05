@@ -347,7 +347,7 @@ pub fn CaseHomePage() -> impl IntoView {
                     <button
                         on:click=move |_| window.update(|w| *w += PAGE_SIZE)
                         prop:disabled=move || loading.get()
-                        class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+                        class="rounded-full border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50"
                     >
                         {move || if loading.get() { "Loading\u{2026}" } else { "Load more" }}
                     </button>
@@ -442,7 +442,7 @@ pub fn CaseHomePage() -> impl IntoView {
                     <Show when=move || selected.get().is_some()>
                         <button
                             on:click=move |_| selected.set(None)
-                            class="mb-4 inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 lg:hidden"
+                            class="mb-4 inline-flex items-center gap-1.5 rounded-full border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 lg:hidden"
                         >
                             "\u{2190} Back to cases"
                         </button>
@@ -467,7 +467,7 @@ pub fn NewCasePage() -> impl IntoView {
     let status = RwSignal::new(CaseStatus::Open.slug().to_string());
     let error = RwSignal::new(String::new());
 
-    let input_class = "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40";
+    let input_class = "w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40";
     let label_class = "block text-xs font-medium text-slate-400";
 
     require_login(state, move || {
@@ -495,7 +495,7 @@ pub fn NewCasePage() -> impl IntoView {
         view! {
         <Layout title="New case".to_string()>
             <div class="mx-auto max-w-2xl space-y-6">
-                <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 space-y-5">
+                <div class="rounded-card border border-slate-800 bg-slate-900 shadow-card p-6 space-y-5">
                     <div>
                         <label class=label_class>
                             "Case name "
@@ -551,13 +551,13 @@ pub fn NewCasePage() -> impl IntoView {
                     <div class="flex gap-3">
                         <button
                             on:click=submit
-                            class="rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600"
+                            class="rounded-full bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600"
                         >
                             "Create case"
                         </button>
                         <A
                             href="/cases"
-                            attr:class="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
+                            attr:class="rounded-full border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
                         >
                             "Cancel"
                         </A>
@@ -680,10 +680,10 @@ pub fn CaseDetail(
 
     let live_case = move || detail.get();
 
-    let input_class = "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40";
+    let input_class = "w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40";
     // The card styling shared by every panel on the page. Named `panel` rather
     // than `section` so it is never confused with a case information *section*.
-    let panel = "rounded-xl border border-slate-800 bg-slate-900 p-4";
+    let panel = "rounded-card border border-slate-800 bg-slate-900 shadow-card p-4";
 
     // --- global edit mode ---
     let editing = RwSignal::new(false);
@@ -950,7 +950,7 @@ pub fn CaseDetail(
                                                 rows.retain(|entry| entry.id != row.id)
                                             })
                                         }
-                                        class="shrink-0 rounded-lg border border-rose-500/40 px-3 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/10"
+                                        class="shrink-0 rounded-full border border-rose-500/40 px-3 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/10"
                                     >
                                         "Remove"
                                     </button>
@@ -966,7 +966,7 @@ pub fn CaseDetail(
                                     );
                                     edit_props.update(|rows| rows.push(row));
                                 }
-                                class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                                class="rounded-full border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800"
                             >
                                 "+ Add property"
                             </button>
@@ -1059,7 +1059,7 @@ pub fn CaseDetail(
                     ),
                     Visibility::Shared => (
                         "Shared with volunteers and client",
-                        "overflow-hidden rounded-xl border border-slate-800 bg-slate-900",
+                        "overflow-hidden rounded-card border border-slate-800 bg-slate-900 shadow-card",
                         "border-b border-slate-800 bg-slate-800/40 px-4 py-4",
                     ),
                 };
@@ -1363,7 +1363,7 @@ pub fn CaseDetail(
                         <a
                             href=download_url
                             download=entry.name.clone()
-                            class="rounded-lg border border-primary-500/40 px-2 py-1 font-medium text-primary-300 hover:bg-primary-500/10"
+                            class="rounded-full border border-primary-500/40 px-2 py-1 font-medium text-primary-300 hover:bg-primary-500/10"
                         >
                             "Download"
                         </a>
@@ -1405,7 +1405,7 @@ pub fn CaseDetail(
                     view! {
                         <button
                             on:click=provision_documents
-                            class="mt-3 rounded-lg border border-primary-500/40 px-3 py-1.5 text-sm font-medium text-primary-300 hover:bg-primary-500/10"
+                            class="mt-3 rounded-full border border-primary-500/40 px-3 py-1.5 text-sm font-medium text-primary-300 hover:bg-primary-500/10"
                         >
                             "Set up documents folder"
                         </button>
@@ -1519,7 +1519,7 @@ pub fn CaseDetail(
                             />
                             <button
                                 on:click=add_folder
-                                class="shrink-0 rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                                class="shrink-0 rounded-full border border-slate-700 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
                             >
                                 "+ New folder"
                             </button>
@@ -1534,7 +1534,7 @@ pub fn CaseDetail(
                             <button
                                 on:click=upload_here
                                 prop:disabled=move || upload_busy.get()
-                                class="shrink-0 rounded-lg bg-primary-500 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
+                                class="shrink-0 rounded-full bg-primary-500 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
                             >
                                 {move || {
                                     if upload_busy.get() { "Uploading\u{2026}" } else { "Upload" }
@@ -1659,7 +1659,10 @@ pub fn CaseDetail(
                         {is_site_admin.then(|| view! {
                             <button on:click=begin_edit class=header_button>"Reassign"</button>
                         })}
-                        <button on:click=begin_edit class=header_button>"Edit case"</button>
+                        <button on:click=begin_edit class=format!("inline-flex items-center gap-2 {header_button}")>
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg>
+                            "Edit case"
+                        </button>
                     </div>
                 }
                 .into_any()
@@ -1685,7 +1688,7 @@ pub fn CaseDetail(
                             <p class="mt-1 text-xs text-slate-400">"Reason given: " {w.reason}</p>
                         });
                     view! {
-                        <div class="mt-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
+                        <div class="mt-3 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2">
                             <p class="text-xs text-slate-300">
                                 "Withdrawn by " {who} {when}
                                 ". Nothing was deleted \u{2014} the case is frozen and can be restored by an administrator."
@@ -1711,7 +1714,7 @@ pub fn CaseDetail(
                                     type="button"
                                     on:click=restore
                                     prop:disabled=move || withdraw_saving.get()
-                                    class="mt-3 rounded-lg border border-emerald-500/40 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
+                                    class="mt-3 rounded-full border border-emerald-500/40 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
                                 >
                                     {move || if withdraw_saving.get() { "Restoring\u{2026}" } else { "Restore case" }}
                                 </button>
@@ -1725,7 +1728,7 @@ pub fn CaseDetail(
                                                 withdrawing.set(true);
                                                 withdraw_error.set(String::new());
                                             }
-                                            class="mt-3 rounded-lg border border-rose-500/40 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/10"
+                                            class="mt-3 rounded-full border border-rose-500/40 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/10"
                                         >
                                             "Withdraw this case"
                                         </button>
@@ -1748,7 +1751,7 @@ pub fn CaseDetail(
                                                 id=withdraw_reason_id.get_value()
                                                 rows="2"
                                                 maxlength="1000"
-                                                class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+                                                class="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
                                                 placeholder="e.g. I filed this by mistake."
                                                 prop:disabled=move || withdraw_saving.get()
                                                 prop:value=move || withdraw_reason.get()
@@ -1759,7 +1762,7 @@ pub fn CaseDetail(
                                                     type="button"
                                                     on:click=confirm_withdraw
                                                     prop:disabled=move || withdraw_saving.get()
-                                                    class="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-50"
+                                                    class="rounded-full bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-50"
                                                 >
                                                     {move || if withdraw_saving.get() { "Withdrawing\u{2026}" } else { "Confirm withdrawal" }}
                                                 </button>
@@ -1770,7 +1773,7 @@ pub fn CaseDetail(
                                                         withdraw_error.set(String::new());
                                                     }
                                                     prop:disabled=move || withdraw_saving.get()
-                                                    class="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                                                    class="rounded-full border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-50"
                                                 >
                                                     "Keep the case"
                                                 </button>
@@ -1839,7 +1842,7 @@ pub fn CaseDetail(
                     <div
                         id=owner_results_id.get_value()
                         role="listbox"
-                        class="absolute z-10 mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-500"
+                        class="absolute z-10 mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-500"
                     >
                         "No matching users."
                     </div>
@@ -1884,7 +1887,7 @@ pub fn CaseDetail(
                 <div
                     id=owner_results_id.get_value()
                     role="listbox"
-                    class="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-slate-700 bg-slate-950"
+                    class="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-slate-700 bg-slate-900"
                 >
                     {rows}
                 </div>
@@ -1898,13 +1901,13 @@ pub fn CaseDetail(
                     <div class="flex items-center gap-2">
                         <button
                             on:click=save_edit
-                            class="shrink-0 rounded-lg bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600"
+                            class="shrink-0 rounded-full bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600"
                         >
                             "Save"
                         </button>
                         <button
                             on:click=cancel_edit
-                            class="shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
+                            class="shrink-0 rounded-full border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
                         >
                             "Cancel"
                         </button>
@@ -2090,7 +2093,7 @@ pub fn CaseDetail(
                             on:click=move |_| log_open.update(|o| *o = !*o)
                             aria-expanded=move || log_open.get().to_string()
                             aria-controls=log_region_id.get_value()
-                            class="rounded-lg border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                            class="rounded-full border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
                         >
                             {move || if log_open.get() { "Hide" } else { "Open change log" }}
                         </button>

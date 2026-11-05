@@ -12,7 +12,8 @@ use crate::server_fns::case_notes::{
 use crate::server_fns::case_properties::CaseProperty;
 use crate::state::AppState;
 
-const CARD: &str = "rounded-[20px] border border-slate-800 bg-slate-900 px-[22px] pt-5 pb-[22px] shadow-[0_1px_2px_rgba(80,60,30,0.04),0_6px_18px_rgba(80,60,30,0.05)]";
+const CARD: &str =
+    "rounded-card border border-slate-800 bg-slate-900 px-[22px] pt-5 pb-[22px] shadow-card";
 const CARD_HEAD: &str =
     "-mx-[22px] flex items-center justify-between gap-2 border-b border-slate-800 px-[22px] pb-3.5";
 const SMALL_BUTTON: &str = "rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-sm font-semibold text-slate-200 hover:bg-slate-950";
@@ -218,7 +219,10 @@ pub fn CaseOverview(
             <div class=CARD_HEAD>
                 <h2 id="case-info-heading" class="text-[19px] font-semibold">"Case information"</h2>
             </div>
-            <p class="mt-3.5 text-sm font-semibold text-slate-400">{client_label}</p>
+            <p class="mt-3.5 flex items-center gap-1.5 text-sm font-semibold text-slate-400">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                {client_label}
+            </p>
             <dl class="mt-2 space-y-2 text-[14.5px]">
                 {shared
                     .into_iter()
@@ -235,7 +239,10 @@ pub fn CaseOverview(
                 let last = restricted_sections.len() - 1;
                 view! {
                     <div class="mt-4 rounded-[14px] border border-[#fcd34d] bg-[#fffdf5] px-4 py-3.5">
-                        <p class="text-sm font-semibold text-[#7a4a06]">"\u{1f512} Volunteers only"</p>
+                        <p class="flex items-center gap-1.5 text-sm font-semibold text-[#7a4a06]">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
+                            "Volunteers only"
+                        </p>
                         <p class="mt-1 text-sm text-[#5b4a2c]">
                             {restricted_sections
                                 .into_iter()
