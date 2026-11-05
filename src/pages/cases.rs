@@ -3,8 +3,8 @@ use leptos::task::spawn_local;
 use leptos_router::components::A;
 use leptos_router::hooks::use_navigate;
 
-use crate::components::case_contacts::CaseContactsPanel;
-use crate::components::case_questionnaires::CaseIntakeTaskSummary;
+use crate::components::case_overview::CaseOverview;
+use crate::components::case_questionnaires::{intake_status, CaseIntakeTaskSummary};
 use crate::components::case_tabs::{CaseTab, CaseTabBar};
 use crate::components::change_log::ChangeLog;
 use crate::components::guard::require_login;
@@ -645,6 +645,7 @@ pub fn CaseDetail(
     }
 
     let owner_name = StoredValue::new(summary.owner_full_name());
+    let client_first_name = StoredValue::new(summary.owner_first_name.clone());
 
     // Owner picker (edit mode only)
     let owner_query = RwSignal::new(String::new());
@@ -2078,21 +2079,6 @@ pub fn CaseDetail(
         }
     };
 
-    // People on the case: staff-only, like Case Notes.
-    let people_panel = move || {
-        if is_client || !has_information_management_access {
-            ().into_any()
-        } else {
-            view! {
-                <CaseContactsPanel
-                    case_id=case_sv.get_value()
-                    can_edit=can_edit && has_information_management_access
-                />
-            }
-            .into_any()
-        }
-    };
-
     let change_log_panel = move || {
         if has_operations_admin_permissions {
             view! {
@@ -2145,8 +2131,25 @@ pub fn CaseDetail(
             }
         });
         let tab_content = move || match tab.get() {
-            CaseTab::Overview => view! { {intake_tasks()} {people_panel()} }.into_any(),
-            CaseTab::Intake => view! { {case_information()} {documents_panel()} }.into_any(),
+            CaseTab::Overview => {
+                let properties = live_case().map(|case| case.properties).unwrap_or_default();
+                view! {
+                    <CaseOverview
+                        case_id=case_sv.get_value()
+                        properties=properties
+                        client_first_name=client_first_name.get_value()
+                        show_intake=state.is_volunteer_or_admin() && can_read_case_material
+                        show_people=has_information_management_access
+                        can_edit_people=can_edit && has_information_management_access
+                        on_open_intake=Callback::new(move |_| select_tab.run(CaseTab::Intake))
+                        on_open_notes=Callback::new(move |_| select_tab.run(CaseTab::CaseNotes))
+                    />
+                }
+                .into_any()
+            }
+            CaseTab::Intake => {
+                view! { {intake_tasks()} {case_information()} {documents_panel()} }.into_any()
+            }
             CaseTab::Legal => view! {
                 {tab_note("Legal work isn't tracked here yet. Court orders filed on this case are below.")}
                 {documents_panel()}
@@ -2183,7 +2186,18 @@ pub fn CaseDetail(
             .into_any(),
         };
         view! {
-            <CaseTabBar tabs=tabs active=tab on_select=select_tab />
+            <CaseTabBar
+                tabs=tabs
+                active=tab
+                on_select=select_tab
+                badges=Signal::derive(move || {
+                    if !(state.is_volunteer_or_admin() && can_read_case_material) {
+                        return Vec::new();
+                    }
+                    let properties = live_case().map(|case| case.properties).unwrap_or_default();
+                    vec![(CaseTab::Intake, intake_status(&properties).0)]
+                })
+            />
             <div
                 role="tabpanel"
                 id=CaseTab::panel_id()

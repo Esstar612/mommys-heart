@@ -86,6 +86,7 @@ pub fn CaseTabBar(
     tabs: Vec<CaseTab>,
     active: RwSignal<CaseTab>,
     on_select: Callback<CaseTab>,
+    #[prop(into)] badges: Signal<Vec<(CaseTab, usize)>>,
 ) -> impl IntoView {
     let refs: Vec<NodeRef<leptos::html::Button>> = tabs.iter().map(|_| NodeRef::new()).collect();
     let tabs = StoredValue::new(tabs);
@@ -134,13 +135,24 @@ pub fn CaseTabBar(
                         on:click=move |_| on_select.run(tab)
                         class=move || {
                             if selected() {
-                                "whitespace-nowrap rounded-full bg-primary-50 px-4 py-2 text-sm font-semibold text-primary-700 ring-1 ring-inset ring-primary-400/40"
+                                "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-primary-50 px-4 py-2 text-sm font-semibold text-primary-700 ring-1 ring-inset ring-primary-400/40"
                             } else {
-                                "whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold text-slate-400 hover:bg-slate-950 hover:text-slate-200"
+                                "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold text-slate-400 hover:bg-slate-950 hover:text-slate-200"
                             }
                         }
                     >
                         {tab.label()}
+                        {move || {
+                            badges
+                                .get()
+                                .into_iter()
+                                .find(|(t, count)| *t == tab && *count > 0)
+                                .map(|(_, count)| view! {
+                                    <span class="rounded-full bg-amber-500/15 px-[7px] text-xs leading-[19px] font-bold text-amber-200">
+                                        {count}
+                                    </span>
+                                })
+                        }}
                     </button>
                 }
             })
