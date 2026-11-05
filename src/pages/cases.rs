@@ -262,28 +262,13 @@ pub fn CaseHomePage() -> impl IntoView {
                     let case_id = c.id.clone();
                     let is_selected = {
                         let case_id = case_id.clone();
-                        move || selected.get().as_deref() == Some(case_id.as_str())
+                        Memo::new(move |_| selected.get().as_deref() == Some(case_id.as_str()))
                     };
-                    let caps = c.capabilities.clone();
-                    let access_badge = access_label(&caps)
-                        .map(|(label, classes)| {
-                            view! { <span class=badge(classes)>{label}</span> }.into_any()
-                        })
-                        .unwrap_or_else(|| ().into_any());
-                    let inactive_badge = c
-                        .inactive
-                        .then(|| {
-                            view! {
-                                <span class=badge("bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-500/30")>
-                                    "\u{26a0} No activity in 30+ days"
-                                </span>
-                            }
-                            .into_any()
-                        })
-                        .unwrap_or_else(|| ().into_any());
+                    let owner = c.owner_full_name();
+                    let owner_title = owner.clone();
+                    let inactive = c.inactive;
                     let status = c.status;
                     let name = c.name.clone();
-                    let owner = c.owner_full_name();
                     let select = {
                         let case_id = case_id.clone();
                         move |_| {
@@ -295,24 +280,28 @@ pub fn CaseHomePage() -> impl IntoView {
                     view! {
                     <button
                         on:click=select
+                        aria-current=move || is_selected.get().then_some("true")
                         class=move || {
-                            let base = "w-full rounded-xl border p-4 text-left transition-colors";
-                            if is_selected() {
-                                format!("{base} border-primary-500/50 bg-slate-800")
+                            let base = "w-full rounded-2xl border px-4 py-3.5 text-left transition-colors";
+                            if is_selected.get() {
+                                format!("{base} border-slate-800 bg-slate-900 pl-5 shadow-[inset_4px_0_0_var(--color-primary-600),0_4px_14px_rgba(80,60,30,0.06)]")
                             } else {
-                                format!("{base} border-slate-800 bg-slate-900 hover:bg-slate-800")
+                                format!("{base} border-transparent hover:bg-slate-900")
                             }
                         }
                     >
-                        <div class="flex items-center justify-between gap-2">
-                            <span class="min-w-0 truncate font-medium">{name}</span>
+                        <span class=move || {
+                            if is_selected.get() { "block truncate font-bold" } else { "block truncate font-semibold" }
+                        }>{name}</span>
+                        <span class="mt-1.5 flex items-center gap-2">
                             <span class=badge(status.badge_classes())>{status.label()}</span>
-                        </div>
-                        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                            <span>"Owner: " {owner}</span>
-                            {access_badge}
-                            {inactive_badge}
-                        </div>
+                            <span class="min-w-0 truncate text-sm text-slate-500" title=owner_title>{owner}</span>
+                        </span>
+                        {inactive.then(|| view! {
+                            <span class="mt-1.5 flex items-center gap-1.5 text-sm font-semibold text-rose-200">
+                                "\u{26a0} No activity 30+ days"
+                            </span>
+                        })}
                     </button>
                 }
                 .into_any()
@@ -377,7 +366,6 @@ pub fn CaseHomePage() -> impl IntoView {
     }
         };
 
-        let input_class = "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40";
 
         // Debounce the search: update the visible input immediately, but wait 1s of
         // idle typing before firing the fetch (and resetting the window).
@@ -395,7 +383,7 @@ pub fn CaseHomePage() -> impl IntoView {
                 >
                     <A
                         href="/cases/new"
-                        attr:class="flex items-center justify-center rounded-xl border border-primary-500/40 bg-primary-500/10 px-4 py-3 text-sm font-semibold text-primary-200 hover:bg-primary-500/20"
+                        attr:class="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-950"
                     >
                         "+ New case"
                     </A>
@@ -413,7 +401,9 @@ pub fn CaseHomePage() -> impl IntoView {
                         </div>
                     </Show>
                     <input
-                        class=input_class
+                        type="search"
+                        aria-label="Search cases by name"
+                        class="w-full rounded-full border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40"
                         placeholder="Search cases by name"
                         prop:value=move || query.get()
                         on:input=move |ev| {
@@ -422,7 +412,7 @@ pub fn CaseHomePage() -> impl IntoView {
                             on_search(val);
                         }
                     />
-                    <div class="space-y-3">{cases_list}</div>
+                    <div class="space-y-1.5">{cases_list}</div>
                     {footer}
                 </div>
                 <div class="min-w-0 lg:block" class:hidden=move || selected.get().is_none()>
@@ -1622,13 +1612,13 @@ pub fn CaseDetail(
                     <div class="flex shrink-0 items-center gap-2">
                         <button
                             on:click=save_edit
-                            class="rounded-lg bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600"
+                            class="rounded-full bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700"
                         >
                             "Save"
                         </button>
                         <button
                             on:click=cancel_edit
-                            class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
+                            class="rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-950"
                         >
                             "Cancel"
                         </button>
@@ -1639,9 +1629,9 @@ pub fn CaseDetail(
                 view! {
                     <button
                         on:click=begin_edit
-                        class="shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                        class="shrink-0 rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-950"
                     >
-                        "Edit"
+                        "Edit case"
                     </button>
                 }
                 .into_any()
@@ -1767,25 +1757,35 @@ pub fn CaseDetail(
                 }
             };
 
+            let access = access_label(&caps)
+                .filter(|_| !is_client)
+                .map(|(label, _)| format!(" \u{b7} {label}"));
+            let court = c
+                .properties
+                .iter()
+                .find(|p| p.key == "Court" && !p.value.trim().is_empty())
+                .map(|p| p.value.clone());
             return view! {
-                <div class=panel>
-                    <div class="flex items-start justify-between gap-3">
+                <section>
+                    <div class="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
                         <div class="min-w-0">
-                            <h2 class="text-lg font-semibold">{c.name.clone()}</h2>
-                            <p class="mt-1 text-sm text-slate-400">
-                                "Filed by "
-                                <ProfileLink user_id=c.owner_id.clone() name=owner_name />
+                            <p class="flex flex-wrap items-center gap-2">
+                                <span class=badge(status.badge_classes())>{status.label()}</span>
+                                <span class="text-sm text-slate-500">
+                                    "Filed by "
+                                    <ProfileLink user_id=c.owner_id.clone() name=owner_name />
+                                    {access}
+                                </span>
                             </p>
+                            <h2 class="mt-2.5 text-4xl leading-tight font-semibold">{c.name.clone()}</h2>
+                            {court.map(|court| view! { <p class="mt-1.5 text-slate-500">{court}</p> })}
                             {terms_accepted.map(|accepted| view! {
                                 <p class="mt-1 text-xs text-slate-500">
                                     "Terms accepted " {accepted}
                                 </p>
                             })}
                         </div>
-                        <div class="flex shrink-0 items-center gap-2">
-                            <span class=badge(status.badge_classes())>{status.label()}</span>
-                            {edit_controls}
-                        </div>
+                        {edit_controls}
                     </div>
                     {client_banner}
                     {withdraw_panel}
@@ -1794,7 +1794,7 @@ pub fn CaseDetail(
                             "You have view-only access to this case."
                         </p>
                     </Show>
-                </div>
+                </section>
             }
             .into_any();
         }
