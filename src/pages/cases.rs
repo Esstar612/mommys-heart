@@ -2144,6 +2144,8 @@ pub fn CaseDetail(
                         show_intake=state.is_volunteer_or_admin() && can_read_case_material
                         show_people=has_information_management_access
                         can_edit_people=can_edit && has_information_management_access
+                        show_plan=state.is_volunteer_or_admin() && can_read_case_material
+                        can_edit_plan=can_edit
                         on_open_intake=Callback::new(move |_| select_tab.run(CaseTab::Intake))
                         on_open_notes=Callback::new(move |_| select_tab.run(CaseTab::CaseNotes))
                     />
