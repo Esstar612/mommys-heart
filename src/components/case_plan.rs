@@ -264,8 +264,8 @@ fn TaskItem(
 
     view! {
         <li class="flex flex-col gap-3.5 rounded-2xl border border-slate-800 px-[18px] py-4">
-            <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2.5">
-                <div class="min-w-0 flex-[1_1_320px]">
+            <div class="flex flex-col gap-2.5 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                <div class="min-w-0 flex-1">
                     <p class="text-base font-bold">{title.clone()}</p>
                     <p class="text-[13.5px] text-slate-500">
                         {format!("Assigned to {} \u{b7} {added}", task.assignee_name)}
@@ -284,7 +284,7 @@ fn TaskItem(
                             }
                         })}
                 </div>
-                <p class="flex flex-wrap gap-1.5">
+                <p class="flex flex-wrap gap-1.5 sm:max-w-[50%] sm:shrink-0 sm:justify-end">
                     {status_pill}
                     {(active && !task.follow_up_on.is_empty())
                         .then(|| {
