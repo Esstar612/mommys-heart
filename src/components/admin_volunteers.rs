@@ -8,7 +8,8 @@ use crate::components::profile_link::ProfileLink;
 use crate::server_fns::err_text;
 use crate::server_fns::users::{list_volunteers_page, VolunteerListItem};
 use crate::server_fns::volunteer_applicants::{
-    decide_volunteer_applicant, list_volunteer_applicants,
+    decide_volunteer_applicant, list_volunteer_applicants, renew_volunteer_setup_link,
+    withdraw_volunteer_applicant,
 };
 use crate::server_fns::volunteers::{
     decide_volunteer_application, list_pending_volunteer_applications,
@@ -207,11 +208,15 @@ pub fn PendingApplications(
                             skills_focus: volunteer.skills_focus,
                             agreed_at: volunteer.agreed_at,
                             pending: true,
+                            setup_expires_at: String::new(),
+                            setup_expired: false,
                         })
                         .collect();
                     merged.extend(applicants.into_iter().map(|applicant| QueueItem {
                         source: Source::Applicant,
                         pending: applicant.is_pending(),
+                        setup_expired: applicant.setup_expired,
+                        setup_expires_at: applicant.setup_expires_at.clone(),
                         name: applicant.full_name(),
                         id: applicant.id,
                         email: applicant.email,
@@ -316,6 +321,8 @@ struct QueueItem {
     /// False for an approved applicant who has not yet followed their setup
     /// link: there is nothing left to decide, but they are worth showing.
     pending: bool,
+    setup_expires_at: String,
+    setup_expired: bool,
 }
 
 /// One pending application, with its approve/deny controls.
@@ -346,6 +353,67 @@ fn ApplicationCard(
     let confirm_email_id =
         StoredValue::new(format!("volunteer-application-email-confirm-{}", item.id));
     let contact_href = format!("mailto:{email}");
+    let setup_expired = RwSignal::new(item.setup_expired);
+    let setup_expires_at = RwSignal::new(item.setup_expires_at.clone());
+    let renewed_notice = RwSignal::new(None::<String>);
+    let copied_link = RwSignal::new(None::<String>);
+    let link_id = StoredValue::new(format!("volunteer-application-setup-link-{}", item.id));
+    let sent_to = StoredValue::new(email.clone());
+    let first_name = StoredValue::new(
+        item.name
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+    );
+
+    let renew = move |send_email: bool| {
+        if deciding.get_untracked() {
+            return;
+        }
+        deciding.set(true);
+        error.set(None);
+        renewed_notice.set(None);
+        copied_link.set(None);
+        let target = target_id.get_value();
+        spawn_local(async move {
+            match renew_volunteer_setup_link(target, send_email).await {
+                Ok(renewed) => {
+                    setup_expired.set(false);
+                    setup_expires_at.set(renewed.expires_at);
+                    match renewed.link {
+                        Some(link) => copied_link.set(Some(link)),
+                        None => renewed_notice.set(Some(format!(
+                            "Sent a new setup link to {}.",
+                            sent_to.get_value()
+                        ))),
+                    }
+                }
+                Err(e) => error.set(Some(err_text(e))),
+            }
+            deciding.set(false);
+        });
+    };
+
+    let withdraw = move |_| {
+        if deciding.get_untracked()
+            || !confirm(
+                "Withdraw this approval? Their setup link stops working and they would need to apply again.",
+            )
+        {
+            return;
+        }
+        deciding.set(true);
+        error.set(None);
+        let target = target_id.get_value();
+        spawn_local(async move {
+            match withdraw_volunteer_applicant(target).await {
+                Ok(()) => reload.update(|value| *value += 1),
+                Err(e) => error.set(Some(err_text(e))),
+            }
+            deciding.set(false);
+        });
+    };
 
     let decide = move |approve: bool| {
         if deciding.get_untracked() {
@@ -444,9 +512,20 @@ fn ApplicationCard(
                         .into_any()
                 } else {
                     view! {
-                        <span class="inline-flex items-center rounded-full bg-sky-500/15 px-2 py-0.5 text-xs font-medium text-sky-300 ring-1 ring-sky-500/30">
-                            "Approved \u{2014} waiting on account setup"
-                        </span>
+                        <Show
+                            when=move || setup_expired.get()
+                            fallback=|| {
+                                view! {
+                                    <span class="inline-flex items-center rounded-full bg-sky-500/15 px-2 py-0.5 text-xs font-medium text-sky-300 ring-1 ring-sky-500/30">
+                                        "Approved \u{2014} waiting on account setup"
+                                    </span>
+                                }
+                            }
+                        >
+                            <span class="inline-flex items-center rounded-full bg-rose-500/15 px-2 py-0.5 text-xs font-medium text-rose-300 ring-1 ring-rose-500/30">
+                                "Setup link expired"
+                            </span>
+                        </Show>
                     }
                         .into_any()
                 }}
@@ -481,8 +560,81 @@ fn ApplicationCard(
             // is for them to follow their setup link.
             <Show when=move || !is_pending>
                 <p class="mt-3 text-xs text-slate-500">
-                    "They have been emailed a link to choose a password and finish setting up their account."
+                    {move || {
+                        let expires = setup_expires_at.get();
+                        if setup_expired.get() {
+                            format!(
+                                "Their setup link expired on {expires}. Send a new one, or copy it to pass on yourself.",
+                            )
+                        } else {
+                            format!(
+                                "Waiting for them to choose a password and finish setting up their account. Their link expires on {expires}.",
+                            )
+                        }
+                    }}
                 </p>
+            </Show>
+
+            <Show when=move || !is_pending && is_site_admin>
+                <Show when=move || renewed_notice.get().is_some()>
+                    <p
+                        class="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300"
+                        role="status"
+                    >
+                        {move || renewed_notice.get().unwrap_or_default()}
+                    </p>
+                </Show>
+                <Show when=move || copied_link.get().is_some()>
+                    <div class="mt-3 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2">
+                        <label
+                            class="mb-1 block text-xs font-medium text-slate-300"
+                            for=link_id.get_value()
+                        >
+                            "New setup link"
+                        </label>
+                        <input
+                            id=link_id.get_value()
+                            readonly
+                            class="min-w-0 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-100"
+                            prop:value=move || copied_link.get().unwrap_or_default()
+                            on:focus=move |event| select_all(&event)
+                        />
+                        <p class="mt-1 text-xs text-slate-500">
+                            {move || {
+                                format!(
+                                    "Anyone with this link can finish this account, so send it only to {} directly, such as in Teams or a text.",
+                                    first_name.get_value(),
+                                )
+                            }}
+                        </p>
+                    </div>
+                </Show>
+                <div class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <button
+                        type="button"
+                        on:click=move |_| renew(true)
+                        prop:disabled=move || deciding.get()
+                        class="rounded-lg bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-50"
+                    >
+                        "Resend setup email"
+                    </button>
+                    <button
+                        type="button"
+                        on:click=move |_| renew(false)
+                        prop:disabled=move || deciding.get()
+                        class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+                    >
+                        "Copy setup link"
+                    </button>
+                    <button
+                        type="button"
+                        on:click=withdraw
+                        prop:disabled=move || deciding.get()
+                        class="rounded-lg border border-rose-500/40 px-3 py-1.5 text-sm font-medium text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+                    >
+                        "Withdraw approval"
+                    </button>
+                </div>
             </Show>
 
             <Show
@@ -602,4 +754,34 @@ fn ApplicationCard(
             </Show>
         </div>
     }
+}
+
+/// Browser `confirm`, or a refusal during SSR where no dialog exists.
+fn confirm(message: &str) -> bool {
+    #[cfg(feature = "hydrate")]
+    {
+        web_sys::window()
+            .and_then(|window| window.confirm_with_message(message).ok())
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "hydrate"))]
+    {
+        let _ = message;
+        false
+    }
+}
+
+fn select_all(event: &leptos::ev::FocusEvent) {
+    #[cfg(feature = "hydrate")]
+    {
+        use wasm_bindgen::JsCast;
+        if let Some(input) = event
+            .target()
+            .and_then(|target| target.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            input.select();
+        }
+    }
+    #[cfg(not(feature = "hydrate"))]
+    let _ = event;
 }

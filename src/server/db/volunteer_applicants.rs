@@ -32,6 +32,7 @@ pub enum Error {
     Database(sqlx::Error),
     NotFound,
     AlreadyDecided,
+    NotAwaitingSetup,
     EmailTaken,
     /// The setup link is unknown, expired, or already used.
     InvalidSetupToken,
@@ -45,6 +46,10 @@ impl std::fmt::Display for Error {
             Self::AlreadyDecided => {
                 write!(formatter, "This application has already been decided.")
             }
+            Self::NotAwaitingSetup => write!(
+                formatter,
+                "This application is no longer waiting on account setup."
+            ),
             Self::EmailTaken => write!(
                 formatter,
                 "Another account already uses that email address."
@@ -86,7 +91,7 @@ fn stamp(at: chrono::DateTime<chrono::Utc>) -> String {
 /// The columns every ordinary read selects. `ssn` is absent by design.
 const SELECT_COLUMNS: &str =
     "id, first_name, last_name, email, agreement_version, agreed_at, status, assigned_email,
-     decided_by_name, decision_note, decided_at,
+     decided_by_name, decision_note, decided_at, setup_expires_at,
      skills_focus, volunteer_role, to_char(date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
      (ssn <> '') AS has_ssn, phone, home_address, emergency_first_name, emergency_last_name,
      emergency_relationship, emergency_phone, legal_name, signature_name,
@@ -106,6 +111,7 @@ struct ApplicantRow {
     decided_by_name: String,
     decision_note: String,
     decided_at: Option<chrono::DateTime<chrono::Utc>>,
+    setup_expires_at: Option<chrono::DateTime<chrono::Utc>>,
     skills_focus: String,
     volunteer_role: String,
     date_of_birth: Option<String>,
@@ -141,6 +147,10 @@ impl From<ApplicantRow> for VolunteerApplicant {
             decided_by_name: row.decided_by_name,
             decision_note: row.decision_note,
             decided_at: row.decided_at.map(stamp).unwrap_or_default(),
+            setup_expires_at: row.setup_expires_at.map(stamp).unwrap_or_default(),
+            setup_expired: row
+                .setup_expires_at
+                .is_some_and(|at| at <= chrono::Utc::now()),
             details: VolunteerDetailsView {
                 skills_focus: row.skills_focus,
                 volunteer_role: row.volunteer_role,
@@ -334,6 +344,53 @@ pub async fn decide(
     .await?;
 
     tx.commit().await?;
+    Ok(())
+}
+
+/// Replace an approved applicant's setup link with a fresh one, valid for the
+/// full term again. The old link stops working. Returns the new expiry for
+/// display.
+pub async fn renew_setup(id: &str, setup_token: &str) -> Result<String, Error> {
+    let expires_at = chrono::Utc::now() + chrono::Duration::days(SETUP_TTL_DAYS);
+    let updated = sqlx::query(
+        "UPDATE volunteer_applicants SET
+             setup_token_hash = $2,
+             setup_expires_at = $3
+         WHERE id = $1 AND status = 'approved'",
+    )
+    .bind(id)
+    .bind(hash(setup_token))
+    .bind(expires_at)
+    .execute(pool())
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(Error::NotAwaitingSetup);
+    }
+    Ok(stamp(expires_at))
+}
+
+/// Take back an approval that was never used, such as a duplicate signup. The
+/// row is marked denied, which frees the address to apply again.
+pub async fn withdraw(id: &str, actor_id: &str, actor_name: &str) -> Result<(), Error> {
+    let updated = sqlx::query(
+        "UPDATE volunteer_applicants SET
+             status = 'denied',
+             decided_by = $2,
+             decided_by_name = $3,
+             decision_note = 'Approval withdrawn before account setup.',
+             decided_at = now(),
+             setup_token_hash = NULL,
+             setup_expires_at = NULL
+         WHERE id = $1 AND status = 'approved'",
+    )
+    .bind(id)
+    .bind(actor_id)
+    .bind(actor_name)
+    .execute(pool())
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(Error::NotAwaitingSetup);
+    }
     Ok(())
 }
 

@@ -32,6 +32,11 @@ pub struct VolunteerApplicant {
     pub decided_by_name: String,
     pub decision_note: String,
     pub decided_at: String,
+    /// When an approved applicant's setup link stops working, for display.
+    #[serde(default)]
+    pub setup_expires_at: String,
+    #[serde(default)]
+    pub setup_expired: bool,
     /// What they told us about themselves. Carries `has_ssn`, never the number.
     #[serde(default)]
     pub details: VolunteerDetailsView,
@@ -187,7 +192,6 @@ pub async fn decide_volunteer_applicant(
     confirm_new_email: String,
 ) -> Result<(), ServerFnError> {
     use crate::server::auth::generate_token;
-    use crate::server::config::Brand;
     use crate::server::db::volunteer_applicants;
     use crate::server::permissions::{require_site_admin, require_user};
     use crate::server_fns::auth::validate_confirmed_email;
@@ -234,15 +238,7 @@ pub async fn decide_volunteer_applicant(
     .await
     .map_err(|error| ServerFnError::new(error.to_string()))?;
 
-    let setup_url = approve.then(|| {
-        let base = Brand::from_env().app_url;
-        let base = if base.is_empty() {
-            "https://app.example.org".to_string()
-        } else {
-            base
-        };
-        format!("{base}/volunteer-setup?token={setup_token}")
-    });
+    let setup_url = approve.then(|| setup_url(&setup_token));
     crate::server::notifications::notify_volunteer_applicant_decision(
         applicant.first_name,
         applicant.email,
@@ -252,6 +248,84 @@ pub async fn decide_volunteer_applicant(
         assigned_email,
     );
     Ok(())
+}
+
+/// A setup link a site admin just renewed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RenewedSetupLink {
+    /// Only present when the admin asked to pass the link on themselves.
+    pub link: Option<String>,
+    pub expires_at: String,
+}
+
+/// Give an approved applicant a fresh setup link, for when the first one expired
+/// or never arrived. With `send_email` it goes out like the approval did;
+/// otherwise the link is returned for a site admin to pass on another way.
+#[server(prefix = "/api")]
+pub async fn renew_volunteer_setup_link(
+    applicant_id: String,
+    send_email: bool,
+) -> Result<RenewedSetupLink, ServerFnError> {
+    use crate::server::auth::generate_token;
+    use crate::server::db::volunteer_applicants;
+    use crate::server::permissions::{require_site_admin, require_user};
+
+    let actor = require_user().await?;
+    require_site_admin(&actor)?;
+    let applicant = volunteer_applicants::get(applicant_id.trim())
+        .await
+        .map_err(ServerFnError::new)?
+        .ok_or_else(|| ServerFnError::new("No volunteer application was found."))?;
+
+    let setup_token = generate_token();
+    let expires_at = volunteer_applicants::renew_setup(&applicant.id, &setup_token)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?;
+
+    let url = setup_url(&setup_token);
+    if !send_email {
+        return Ok(RenewedSetupLink {
+            link: Some(url),
+            expires_at,
+        });
+    }
+    crate::server::notifications::notify_volunteer_applicant_decision(
+        applicant.first_name,
+        applicant.email,
+        true,
+        applicant.decision_note,
+        Some(url),
+        (!applicant.assigned_email.is_empty()).then_some(applicant.assigned_email),
+    );
+    Ok(RenewedSetupLink {
+        link: None,
+        expires_at,
+    })
+}
+
+/// Withdraw an approval nobody has used yet, such as a duplicate signup. Site
+/// admins only. The applicant is not emailed.
+#[server(prefix = "/api")]
+pub async fn withdraw_volunteer_applicant(applicant_id: String) -> Result<(), ServerFnError> {
+    use crate::server::db::volunteer_applicants;
+    use crate::server::permissions::{require_site_admin, require_user};
+
+    let actor = require_user().await?;
+    require_site_admin(&actor)?;
+    volunteer_applicants::withdraw(applicant_id.trim(), &actor.id, &actor.full_name())
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))
+}
+
+#[cfg(feature = "ssr")]
+fn setup_url(setup_token: &str) -> String {
+    let base = crate::server::config::Brand::from_env().app_url;
+    let base = if base.is_empty() {
+        "https://app.example.org".to_string()
+    } else {
+        base
+    };
+    format!("{base}/volunteer-setup?token={setup_token}")
 }
 
 /// What the setup page shows for a setup link: who it is for and which address
