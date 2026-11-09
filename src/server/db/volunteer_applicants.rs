@@ -88,6 +88,11 @@ fn stamp(at: chrono::DateTime<chrono::Utc>) -> String {
     at.with_timezone(&chrono::Local).format(STAMP).to_string()
 }
 
+/// A setup link's expiry as a bare date, since the sentence it sits in names no timezone.
+fn expiry_date(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string()
+}
+
 /// The columns every ordinary read selects. `ssn` is absent by design.
 const SELECT_COLUMNS: &str =
     "id, first_name, last_name, email, agreement_version, agreed_at, status, assigned_email,
@@ -147,7 +152,7 @@ impl From<ApplicantRow> for VolunteerApplicant {
             decided_by_name: row.decided_by_name,
             decision_note: row.decision_note,
             decided_at: row.decided_at.map(stamp).unwrap_or_default(),
-            setup_expires_at: row.setup_expires_at.map(stamp).unwrap_or_default(),
+            setup_expires_at: row.setup_expires_at.map(expiry_date).unwrap_or_default(),
             setup_expired: row
                 .setup_expires_at
                 .is_some_and(|at| at <= chrono::Utc::now()),
@@ -348,10 +353,17 @@ pub async fn decide(
 }
 
 /// Replace an approved applicant's setup link with a fresh one, valid for the
-/// full term again. The old link stops working. Returns the new expiry for
-/// display.
-pub async fn renew_setup(id: &str, setup_token: &str) -> Result<String, Error> {
+/// full term again. The old link stops working. Audited with the admin who made
+/// it and whether it was emailed or shown to them. Returns the new expiry date.
+pub async fn renew_setup(
+    id: &str,
+    setup_token: &str,
+    actor_id: &str,
+    actor_name: &str,
+    emailed: bool,
+) -> Result<String, Error> {
     let expires_at = chrono::Utc::now() + chrono::Duration::days(SETUP_TTL_DAYS);
+    let mut tx = pool().begin().await?;
     let updated = sqlx::query(
         "UPDATE volunteer_applicants SET
              setup_token_hash = $2,
@@ -361,36 +373,70 @@ pub async fn renew_setup(id: &str, setup_token: &str) -> Result<String, Error> {
     .bind(id)
     .bind(hash(setup_token))
     .bind(expires_at)
-    .execute(pool())
+    .execute(&mut *tx)
     .await?;
     if updated.rows_affected() == 0 {
         return Err(Error::NotAwaitingSetup);
     }
-    Ok(stamp(expires_at))
+
+    let expires = expiry_date(expires_at);
+    let delivered = if emailed {
+        "emailed to applicant"
+    } else {
+        "shown to admin"
+    };
+    audit::record_in_transaction_by(
+        &mut tx,
+        audit::Entity::VolunteerApplicant,
+        id,
+        actor_id,
+        actor_name,
+        "setup link",
+        "",
+        &format!("{delivered}, expires {expires}"),
+    )
+    .await?;
+
+    tx.commit().await?;
+    Ok(expires)
 }
 
 /// Take back an approval that was never used, such as a duplicate signup. The
-/// row is marked denied, which frees the address to apply again.
+/// row is marked denied, which frees the address to apply again. The original
+/// approver is kept; the withdrawal is appended to the note and audited.
 pub async fn withdraw(id: &str, actor_id: &str, actor_name: &str) -> Result<(), Error> {
+    let mut tx = pool().begin().await?;
     let updated = sqlx::query(
         "UPDATE volunteer_applicants SET
              status = 'denied',
-             decided_by = $2,
-             decided_by_name = $3,
-             decision_note = 'Approval withdrawn before account setup.',
-             decided_at = now(),
+             decision_note = trim(both E'\\n' from decision_note || E'\\n'
+                 || 'Approval withdrawn by ' || $2::text || ' on '
+                 || to_char(now(), 'YYYY-MM-DD') || '.'),
              setup_token_hash = NULL,
              setup_expires_at = NULL
          WHERE id = $1 AND status = 'approved'",
     )
     .bind(id)
-    .bind(actor_id)
     .bind(actor_name)
-    .execute(pool())
+    .execute(&mut *tx)
     .await?;
     if updated.rows_affected() == 0 {
         return Err(Error::NotAwaitingSetup);
     }
+
+    audit::record_in_transaction_by(
+        &mut tx,
+        audit::Entity::VolunteerApplicant,
+        id,
+        actor_id,
+        actor_name,
+        "status",
+        "approved",
+        "denied (approval withdrawn)",
+    )
+    .await?;
+
+    tx.commit().await?;
     Ok(())
 }
 

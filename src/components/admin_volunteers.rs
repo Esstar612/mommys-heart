@@ -1,6 +1,8 @@
 //! Admin dashboard tab: every volunteer account and whether they have completed
 //! the volunteer agreement. Each name links to that user's profile.
 
+use std::collections::HashMap;
+
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -176,6 +178,9 @@ pub fn PendingApplications(
     let load_error = RwSignal::new(None::<String>);
     let loading = RwSignal::new(false);
     let request_generation = RwSignal::new(0u64);
+    // Setup links shown to the admin, by applicant id. Kept here so a reload,
+    // which rebuilds every card, does not hide a link they are still copying.
+    let shown_links = RwSignal::new(HashMap::<String, String>::new());
 
     Effect::new(move |_| {
         if !active.get() {
@@ -228,6 +233,14 @@ pub fn PendingApplications(
                     state
                         .volunteer_requests_pending
                         .set(merged.iter().filter(|item| item.pending).count() as i64);
+                    // Forget links for applicants that have left the queue.
+                    shown_links.update(|links| {
+                        links.retain(|id, _| {
+                            merged.iter().any(|item| {
+                                item.source == Source::Applicant && !item.pending && &item.id == id
+                            })
+                        })
+                    });
                     items.set(merged);
                     load_error.set(None);
                 }
@@ -266,7 +279,12 @@ pub fn PendingApplications(
                 .into_iter()
                 .map(|item| {
                     view! {
-                        <ApplicationCard item=item reload=reload is_site_admin=is_site_admin />
+                        <ApplicationCard
+                            item=item
+                            reload=reload
+                            is_site_admin=is_site_admin
+                            shown_links=shown_links
+                        />
                     }
                     .into_any()
                 })
@@ -331,6 +349,7 @@ fn ApplicationCard(
     item: QueueItem,
     reload: RwSignal<u32>,
     is_site_admin: bool,
+    shown_links: RwSignal<HashMap<String, String>>,
 ) -> impl IntoView {
     let state = expect_context::<AppState>();
     let target_id = StoredValue::new(item.id.clone());
@@ -356,7 +375,9 @@ fn ApplicationCard(
     let setup_expired = RwSignal::new(item.setup_expired);
     let setup_expires_at = RwSignal::new(item.setup_expires_at.clone());
     let renewed_notice = RwSignal::new(None::<String>);
-    let copied_link = RwSignal::new(None::<String>);
+    let copied_link = Signal::derive(move || {
+        shown_links.with(|links| links.get(&target_id.get_value()).cloned())
+    });
     let link_id = StoredValue::new(format!("volunteer-application-setup-link-{}", item.id));
     let sent_to = StoredValue::new(email.clone());
     let first_name = StoredValue::new(
@@ -374,17 +395,22 @@ fn ApplicationCard(
         deciding.set(true);
         error.set(None);
         renewed_notice.set(None);
-        copied_link.set(None);
         let target = target_id.get_value();
+        shown_links.update(|links| {
+            links.remove(&target);
+        });
         spawn_local(async move {
-            match renew_volunteer_setup_link(target, send_email).await {
+            match renew_volunteer_setup_link(target.clone(), send_email).await {
                 Ok(renewed) => {
                     setup_expired.set(false);
                     setup_expires_at.set(renewed.expires_at);
                     match renewed.link {
-                        Some(link) => copied_link.set(Some(link)),
+                        Some(link) => shown_links.update(|links| {
+                            links.insert(target, link);
+                        }),
+                        // Delivery is fire-and-forget, so this cannot claim it arrived.
                         None => renewed_notice.set(Some(format!(
-                            "Sent a new setup link to {}.",
+                            "Queued a new setup link to {}.",
                             sent_to.get_value()
                         ))),
                     }
@@ -564,7 +590,7 @@ fn ApplicationCard(
                         let expires = setup_expires_at.get();
                         if setup_expired.get() {
                             format!(
-                                "Their setup link expired on {expires}. Send a new one, or copy it to pass on yourself.",
+                                "Their setup link expired on {expires}. Send a new one, or get a link to pass on yourself.",
                             )
                         } else {
                             format!(
@@ -624,7 +650,7 @@ fn ApplicationCard(
                         prop:disabled=move || deciding.get()
                         class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50"
                     >
-                        "Copy setup link"
+                        "Get setup link"
                     </button>
                     <button
                         type="button"

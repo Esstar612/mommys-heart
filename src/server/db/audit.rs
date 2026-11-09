@@ -25,6 +25,8 @@ pub enum Entity {
     Organization,
     Grant,
     Funding,
+    /// A public volunteer signup that has no account yet.
+    VolunteerApplicant,
 }
 
 impl Entity {
@@ -36,6 +38,7 @@ impl Entity {
             Entity::Organization => "organization",
             Entity::Grant => "grant",
             Entity::Funding => "funding",
+            Entity::VolunteerApplicant => "volunteer_applicant",
         }
     }
 }

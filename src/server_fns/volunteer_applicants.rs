@@ -277,10 +277,29 @@ pub async fn renew_volunteer_setup_link(
         .map_err(ServerFnError::new)?
         .ok_or_else(|| ServerFnError::new("No volunteer application was found."))?;
 
+    // Checked before renewing, so the old link still works if nothing can go out.
+    if send_email && !crate::server::notifications::email_enabled() {
+        return Err(ServerFnError::new(
+            "Email isn't set up on this server \u{2014} use Get setup link instead.",
+        ));
+    }
+
     let setup_token = generate_token();
-    let expires_at = volunteer_applicants::renew_setup(&applicant.id, &setup_token)
-        .await
-        .map_err(|error| ServerFnError::new(error.to_string()))?;
+    let expires_at = volunteer_applicants::renew_setup(
+        &applicant.id,
+        &setup_token,
+        &actor.id,
+        &actor.full_name(),
+        send_email,
+    )
+    .await
+    .map_err(|error| ServerFnError::new(error.to_string()))?;
+    tracing::info!(
+        actor = %actor.id,
+        applicant = %applicant.id,
+        emailed = send_email,
+        "renewed volunteer setup link"
+    );
 
     let url = setup_url(&setup_token);
     if !send_email {
