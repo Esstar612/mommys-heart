@@ -44,6 +44,11 @@ fn configured_email() -> Option<EmailConfig> {
     (cfg.dry_run || cfg.is_configured()).then_some(cfg)
 }
 
+/// Whether notifications would be sent (or dry-run logged) at all.
+pub fn email_enabled() -> bool {
+    configured_email().is_some()
+}
+
 /// Who a case notification should reach.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Audience {
