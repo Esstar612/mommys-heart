@@ -102,6 +102,7 @@ pub async fn add_plan_action(
         return Err(ServerFnError::new("Describe the action."));
     }
     let follow_up_on = clean_date(&follow_up_on, "follow-up date").map_err(ServerFnError::new)?;
+    reject_past(&follow_up_on, "The follow-up date")?;
     let assignee = case_plan::assignees(&case_id)
         .await
         .map_err(ServerFnError::new)?
@@ -138,6 +139,7 @@ pub async fn log_task_attempt(
     if next_try.is_empty() {
         return Err(ServerFnError::new("Pick the date of the next try."));
     }
+    reject_past(&next_try, "The next try")?;
     case_plan::log_attempt(
         &task_id,
         &case_id,
@@ -148,7 +150,7 @@ pub async fn log_task_attempt(
         &user.full_name(),
     )
     .await
-    .map_err(ServerFnError::new)
+    .map_err(plan_error)
 }
 
 #[server(prefix = "/api")]
@@ -173,10 +175,11 @@ pub async fn record_task_outcome(
         &user.full_name(),
     )
     .await
-    .map_err(ServerFnError::new)
+    .map_err(plan_error)
 }
 
-/// The assignee needs `AddNotes`, anyone else `EditCase`; returns the stored task's case.
+/// The assignee needs `AddNotes` or `EditCase`, anyone else `EditCase`; returns the stored
+/// task's case.
 #[cfg(feature = "ssr")]
 async fn authorize_task_update(
     user: &crate::server_fns::users::User,
@@ -194,11 +197,33 @@ async fn authorize_task_update(
     if owner.closed {
         return Err(ServerFnError::new("This task already has a final outcome."));
     }
-    let cap = if owner.assignee_id.as_deref() == Some(user.id.as_str()) {
-        CaseCapability::AddNotes
-    } else {
-        CaseCapability::EditCase
-    };
-    require_cap(user, &owner.case_id, cap).await?;
+    let is_assignee = owner.assignee_id.as_deref() == Some(user.id.as_str());
+    if is_assignee
+        && require_cap(user, &owner.case_id, CaseCapability::AddNotes)
+            .await
+            .is_ok()
+    {
+        return Ok(owner.case_id);
+    }
+    require_cap(user, &owner.case_id, CaseCapability::EditCase).await?;
     Ok(owner.case_id)
+}
+
+/// A date the plan schedules work for must not be in the past.
+#[cfg(feature = "ssr")]
+fn reject_past(date: &str, label: &str) -> Result<(), ServerFnError> {
+    if !date.is_empty() && date < crate::helpers::dates::today().as_str() {
+        return Err(ServerFnError::new(format!("{label} can't be in the past.")));
+    }
+    Ok(())
+}
+
+/// The database layer reports a lost race on a task as a protocol error whose text is meant
+/// for the user.
+#[cfg(feature = "ssr")]
+fn plan_error(error: sqlx::Error) -> ServerFnError {
+    match error {
+        sqlx::Error::Protocol(message) => ServerFnError::new(message),
+        other => ServerFnError::new(other),
+    }
 }

@@ -99,6 +99,11 @@ pub async fn assignees(case_id: &str) -> Result<Vec<PlanAssignee>, sqlx::Error> 
          FROM users u
          JOIN case_assignments ca ON ca.user_id = u.id
          WHERE ca.case_id = $1 AND ca.capability = 'view_case'
+           AND EXISTS (
+               SELECT 1 FROM case_assignments n
+               WHERE n.case_id = ca.case_id AND n.user_id = ca.user_id
+                 AND n.capability = 'add_notes'
+           )
            AND u.role IN ('volunteer', 'operations_admin', 'site_admin')
          ORDER BY u.first_name, u.last_name",
     )
