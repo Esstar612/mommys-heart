@@ -6,6 +6,7 @@ use crate::server_fns::case_plan::{
     add_plan_action, list_case_plan, list_plan_assignees, log_task_attempt, record_task_outcome,
     AttemptResult, CasePlanAction, CaseTask, PlanAssignee, TaskOutcome,
 };
+use crate::server_fns::err_text;
 use crate::state::{now_stamp, AppState};
 
 const CARD: &str =
@@ -31,7 +32,7 @@ struct PlanRow {
 }
 
 #[component]
-pub fn CasePlanCard(case_id: String, can_edit: bool) -> impl IntoView {
+pub fn CasePlanCard(case_id: String, can_edit: bool, can_note: bool) -> impl IntoView {
     let state = expect_context::<AppState>();
     let viewer_id = StoredValue::new(
         state
@@ -43,21 +44,43 @@ pub fn CasePlanCard(case_id: String, can_edit: bool) -> impl IntoView {
     let plan = RwSignal::new(Vec::<CasePlanAction>::new());
     let assignees = RwSignal::new(Vec::<PlanAssignee>::new());
     let adding = RwSignal::new(false);
+    let saving_action = RwSignal::new(false);
+    let loading = RwSignal::new(true);
+    let load_error = RwSignal::new(String::new());
     let error = RwSignal::new(String::new());
     let today = StoredValue::new(now_stamp()[..10].to_string());
 
+    // Reloads also run after a save, when the card may already be gone, so
+    // nothing here assumes it is still mounted.
     let reload = move || {
+        let Some(case_id) = case_sv.try_get_value() else {
+            return;
+        };
         spawn_local(async move {
-            if let Ok(found) = list_case_plan(case_sv.get_value()).await {
-                plan.set(found);
+            let found = list_case_plan(case_id).await;
+            let _ = loading.try_set(false);
+            match found {
+                Ok(found) => {
+                    let _ = plan.try_set(found);
+                    let _ = load_error.try_set(String::new());
+                }
+                Err(e) => {
+                    let _ = load_error.try_set(err_text(e));
+                }
             }
         })
     };
     reload();
     if can_edit {
+        let case_id = case_sv.get_value();
         spawn_local(async move {
-            if let Ok(found) = list_plan_assignees(case_sv.get_value()).await {
-                assignees.set(found);
+            match list_plan_assignees(case_id).await {
+                Ok(found) => {
+                    let _ = assignees.try_set(found);
+                }
+                Err(e) => {
+                    let _ = error.try_set(err_text(e));
+                }
             }
         });
     }
@@ -98,23 +121,30 @@ pub fn CasePlanCard(case_id: String, can_edit: bool) -> impl IntoView {
     let follow_up = RwSignal::new(String::new());
     let save_action = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
+        if saving_action.get_untracked() {
+            return;
+        }
+        saving_action.set(true);
+        let request = add_plan_action(
+            case_sv.get_value(),
+            title.get_untracked(),
+            assignee.get_untracked(),
+            follow_up.get_untracked(),
+        );
         spawn_local(async move {
-            match add_plan_action(
-                case_sv.get_value(),
-                title.get(),
-                assignee.get(),
-                follow_up.get(),
-            )
-            .await
-            {
+            let result = request.await;
+            let _ = saving_action.try_set(false);
+            match result {
                 Ok(()) => {
-                    title.set(String::new());
-                    follow_up.set(String::new());
-                    error.set(String::new());
-                    adding.set(false);
+                    let _ = title.try_set(String::new());
+                    let _ = follow_up.try_set(String::new());
+                    let _ = error.try_set(String::new());
+                    let _ = adding.try_set(false);
                     reload();
                 }
-                Err(e) => error.set(e.to_string()),
+                Err(e) => {
+                    let _ = error.try_set(err_text(e));
+                }
             }
         });
     };
@@ -142,10 +172,12 @@ pub fn CasePlanCard(case_id: String, can_edit: bool) -> impl IntoView {
                     </div>
                     <div class=FIELD>
                         <label for="plan-follow-up" class=FIELD_LABEL>"Due date"</label>
-                        <input id="plan-follow-up" type="date" class=FIELD_INPUT bind:value=follow_up />
+                        <input id="plan-follow-up" type="date" min=today.get_value() class=FIELD_INPUT bind:value=follow_up />
                     </div>
                     <div class="flex gap-2 sm:col-span-2">
-                        <button type="submit" class=PRIMARY>"Save action"</button>
+                        <button type="submit" class=format!("{PRIMARY} disabled:opacity-60") prop:disabled=move || saving_action.get()>
+                            {move || if saving_action.get() { "Saving\u{2026}" } else { "Save action" }}
+                        </button>
                         <button type="button" class=SECONDARY on:click=move |_| adding.set(false)>"Cancel"</button>
                     </div>
                 </form>
@@ -154,7 +186,8 @@ pub fn CasePlanCard(case_id: String, can_edit: bool) -> impl IntoView {
     };
 
     let item = move |row: PlanRow| {
-        let can_update = can_edit || viewer_id.with_value(|v| *v == row.task.assignee_id);
+        let can_update =
+            can_edit || (can_note && viewer_id.with_value(|v| *v == row.task.assignee_id));
         view! {
             <TaskItem
                 row=row
@@ -168,8 +201,14 @@ pub fn CasePlanCard(case_id: String, can_edit: bool) -> impl IntoView {
     let open_list = move || {
         let (open, closed) = rows.get();
         if open.is_empty() && closed.is_empty() {
-            return view! { <p class="py-4 text-sm text-slate-500">"No approved actions yet."</p> }
-                .into_any();
+            let message = if loading.get() {
+                "Loading\u{2026}".to_string()
+            } else if !load_error.get().is_empty() {
+                load_error.get()
+            } else {
+                "No approved actions yet.".to_string()
+            };
+            return view! { <p class="py-4 text-sm text-slate-500">{message}</p> }.into_any();
         }
         view! {
             <ul class="mt-4 mb-3 flex flex-col gap-3">{open.into_iter().map(item).collect::<Vec<_>>()}</ul>
@@ -185,7 +224,7 @@ pub fn CasePlanCard(case_id: String, can_edit: bool) -> impl IntoView {
                 <details class="group border-t border-slate-800 pt-3">
                     <summary class="flex min-h-10 cursor-pointer list-none items-center gap-2 font-bold text-[#4a4038] [&::-webkit-details-marker]:hidden">
                         <svg class="h-4 w-4 transition-transform group-open:rotate-90" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
-                        {format!("Completed ({count})")}
+                        {format!("Closed ({count})")}
                     </summary>
                     <ul class="mt-2 mb-2 flex flex-col gap-3">{closed.into_iter().map(item).collect::<Vec<_>>()}</ul>
                 </details>
@@ -252,6 +291,7 @@ fn TaskItem(
 ) -> impl IntoView {
     let PlanRow { title, added, task } = row;
     let panel = RwSignal::new(Panel::Closed);
+    let busy = RwSignal::new(false);
     let error = RwSignal::new(String::new());
     let attempt_result = RwSignal::new(AttemptResult::CouldNotReach);
     let next_try = RwSignal::new(String::new());
@@ -261,36 +301,51 @@ fn TaskItem(
     let task_id = StoredValue::new(task.id.clone());
     let ids = StoredValue::new(format!("task-{}", task.id));
     let title_sv = StoredValue::new(title.clone());
+    let today_sv = StoredValue::new(today.clone());
 
     let open_panel = move |which: Panel| {
         error.set(String::new());
         panel.set(which);
     };
+    // A successful save reloads the list, which replaces this row, so only
+    // the failure path touches this row's signals afterwards.
+    let finish = move |result: Result<(), ServerFnError>| {
+        let _ = busy.try_set(false);
+        match result {
+            Ok(()) => {
+                let _ = on_saved.try_run(());
+            }
+            Err(e) => {
+                let _ = error.try_set(err_text(e));
+            }
+        }
+    };
     let save_attempt = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        spawn_local(async move {
-            match log_task_attempt(
-                task_id.get_value(),
-                attempt_result.get(),
-                attempt_note.get(),
-                next_try.get(),
-            )
-            .await
-            {
-                Ok(()) => on_saved.run(()),
-                Err(e) => error.set(e.to_string()),
-            }
-        });
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        let request = log_task_attempt(
+            task_id.get_value(),
+            attempt_result.get_untracked(),
+            attempt_note.get_untracked(),
+            next_try.get_untracked(),
+        );
+        spawn_local(async move { finish(request.await) });
     };
     let save_outcome = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        spawn_local(async move {
-            match record_task_outcome(task_id.get_value(), outcome.get(), outcome_notes.get()).await
-            {
-                Ok(()) => on_saved.run(()),
-                Err(e) => error.set(e.to_string()),
-            }
-        });
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        let request = record_task_outcome(
+            task_id.get_value(),
+            outcome.get_untracked(),
+            outcome_notes.get_untracked(),
+        );
+        spawn_local(async move { finish(request.await) });
     };
 
     let due = task.follow_up_on.clone();
@@ -389,7 +444,7 @@ fn TaskItem(
                     <label class=FIELD_LABEL for=format!("{}-next", ids.get_value())>
                         "Next try " <span class="text-[#9b2c22]">"*"</span>
                     </label>
-                    <input id=format!("{}-next", ids.get_value()) type="date" required class=FIELD_INPUT bind:value=next_try />
+                    <input id=format!("{}-next", ids.get_value()) type="date" required min=today_sv.get_value() class=FIELD_INPUT bind:value=next_try />
                 </div>
                 <div class=FIELD>
                     <label class=FIELD_LABEL for=format!("{}-note", ids.get_value())>"Note (optional)"</label>
@@ -399,7 +454,7 @@ fn TaskItem(
                     "The task stays open. Use \u{201c}Record final outcome\u{201d} when it's done, declined or no longer needed."
                 </p>
                 <div class="flex gap-2 sm:col-span-2">
-                    <button type="submit" class=PRIMARY>"Save attempt"</button>
+                    <button type="submit" class=format!("{PRIMARY} disabled:opacity-60") prop:disabled=move || busy.get()>"Save attempt"</button>
                     <button type="button" class=SECONDARY on:click=move |_| panel.set(Panel::Closed)>"Cancel"</button>
                 </div>
             </form>
@@ -435,9 +490,9 @@ fn TaskItem(
                     <label class=FIELD_LABEL for=format!("{}-outcome-notes", ids.get_value())>"Outcome notes"</label>
                     <textarea id=format!("{}-outcome-notes", ids.get_value()) rows="2" class=FIELD_INPUT bind:value=outcome_notes></textarea>
                 </div>
-                <p class=format!("{HINT} sm:col-span-2")>"This closes the task and moves it to Completed."</p>
+                <p class=format!("{HINT} sm:col-span-2")>"This closes the task and moves it to Closed."</p>
                 <div class="flex gap-2 sm:col-span-2">
-                    <button type="submit" class=PRIMARY>"Save outcome"</button>
+                    <button type="submit" class=format!("{PRIMARY} disabled:opacity-60") prop:disabled=move || busy.get()>"Save outcome"</button>
                     <button type="button" class=SECONDARY on:click=move |_| panel.set(Panel::Closed)>"Cancel"</button>
                 </div>
             </form>

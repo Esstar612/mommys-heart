@@ -34,6 +34,7 @@ pub fn CaseOverview(
     can_edit_people: bool,
     show_plan: bool,
     can_edit_plan: bool,
+    can_note_plan: bool,
     on_open_intake: Callback<()>,
     on_open_notes: Callback<()>,
 ) -> impl IntoView {
@@ -373,7 +374,7 @@ pub fn CaseOverview(
         <div class="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
             <div class="min-w-0 space-y-6">
                 {needs_you}
-                {show_plan.then(|| view! { <CasePlanCard case_id=case_sv.get_value() can_edit=can_edit_plan /> })}
+                {show_plan.then(|| view! { <CasePlanCard case_id=case_sv.get_value() can_edit=can_edit_plan can_note=can_note_plan /> })}
                 <Show when=move || managing_people.get()>
                     <CaseContactsPanel case_id=case_sv.get_value() can_edit=can_edit_people />
                 </Show>
