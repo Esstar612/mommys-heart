@@ -4,6 +4,7 @@ use leptos_router::components::A;
 
 use crate::components::case_contacts::CaseContactsPanel;
 use crate::components::case_questionnaires::intake_status;
+use crate::helpers::format::initials;
 use crate::helpers::visibility::Visibility;
 use crate::server_fns::case_contacts::{list_case_contacts, CaseContact, CaseContactRole};
 use crate::server_fns::case_notes::{
@@ -384,14 +385,6 @@ pub fn CaseOverview(
 
 fn short_date(raw: &str) -> String {
     raw.get(..10).unwrap_or(raw).to_string()
-}
-
-fn initials(name: &str) -> String {
-    name.split_whitespace()
-        .filter_map(|part| part.chars().next())
-        .take(2)
-        .collect::<String>()
-        .to_uppercase()
 }
 
 fn month_day(raw: &str) -> String {

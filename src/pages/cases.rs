@@ -1077,7 +1077,7 @@ pub fn CaseDetail(
                 let (heading, container_class, header_class) = match visibility {
                     Visibility::VolunteerOnly => (
                         "Volunteer only",
-                        "overflow-hidden rounded-xl border border-amber-500/30 bg-slate-900",
+                        "overflow-hidden rounded-card border border-amber-500/30 bg-slate-900 shadow-card",
                         "border-b border-amber-500/20 bg-amber-500/10 px-4 py-4",
                     ),
                     Visibility::Shared => (
