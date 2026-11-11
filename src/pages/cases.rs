@@ -2205,6 +2205,7 @@ pub fn CaseDetail(
                     properties=overview_properties.get()
                     client_first_name=client_first_name.get_value()
                     show_intake=state.is_volunteer_or_admin() && can_read_case_material
+                    show_case_info=can_read_case_material
                     show_people=has_information_management_access
                     can_edit_people=can_edit && has_information_management_access
                     on_open_intake=Callback::new(move |_| select_tab.run(CaseTab::Intake))
