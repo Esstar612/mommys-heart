@@ -389,7 +389,6 @@ pub fn CaseHomePage() -> impl IntoView {
     }
         };
 
-
         // Debounce the search: update the visible input immediately, but wait 1s of
         // idle typing before firing the fetch (and resetting the window).
         let mut on_search = debounce(std::time::Duration::from_secs(1), move |val: String| {
@@ -605,6 +604,14 @@ pub fn CaseDetail(
         role.is_some_and(|role| role.has_operations_admin_permissions());
     let has_information_management_access = state.has_information_management_access();
     let is_site_admin = role.is_some_and(|role| role.is_site_admin());
+    // The admin's own user page, where case capabilities are granted.
+    let access_href = StoredValue::new(
+        state
+            .current_user_summary
+            .get_untracked()
+            .map(|user| format!("/admin/users/{}", user.id))
+            .unwrap_or_else(|| "/admin/users".to_string()),
+    );
     let is_client = matches!(role, Some(AccountRole::Client));
     let can_note = caps.contains(&CaseCapability::AddNotes) && accepts_changes;
     // Withdrawal is an ownership right, not a case capability: signup grants the
@@ -688,6 +695,7 @@ pub fn CaseDetail(
 
     // --- global edit mode ---
     let editing = RwSignal::new(false);
+    let saving = RwSignal::new(false);
     let edit_name = RwSignal::new(String::new());
     let edit_status = RwSignal::new(String::new());
     let edit_owner = RwSignal::new(String::new());
@@ -808,49 +816,61 @@ pub fn CaseDetail(
         let owner = edit_owner.get_untracked();
         let can_see_restricted = state.is_volunteer_or_admin();
         let properties = edit_props.get_untracked();
+        if saving.get_untracked() {
+            return;
+        }
+        saving.set(true);
         spawn_local(async move {
-            if can_edit {
-                if let Err(e) = cases::set_case_name(case_id.clone(), name).await {
-                    edit_error.set(err_text(e));
-                    return;
-                }
-                if can_see_restricted {
-                    if let Some(s) = CaseStatus::from_slug(&status_slug) {
-                        if let Err(e) = cases::set_case_status(case_id.clone(), s).await {
+            let saved = async {
+                if can_edit {
+                    if let Err(e) = cases::set_case_name(case_id.clone(), name).await {
+                        edit_error.set(err_text(e));
+                        return false;
+                    }
+                    if can_see_restricted {
+                        if let Some(s) = CaseStatus::from_slug(&status_slug) {
+                            if let Err(e) = cases::set_case_status(case_id.clone(), s).await {
+                                edit_error.set(err_text(e));
+                                return false;
+                            }
+                        }
+                    }
+                    if is_site_admin {
+                        if let Err(e) = cases::set_case_owner(case_id.clone(), owner).await {
                             edit_error.set(err_text(e));
-                            return;
+                            return false;
+                        }
+                    }
+
+                    for visibility in Visibility::ALL {
+                        if visibility.is_restricted() && !can_see_restricted {
+                            continue;
+                        }
+                        let rows = properties
+                            .iter()
+                            .filter(|row| row.visibility == visibility)
+                            .map(|row| CaseProperty {
+                                key: row.key.get_untracked(),
+                                value: row.value.get_untracked(),
+                                section: row.section.get_untracked(),
+                                visibility,
+                            })
+                            .collect();
+                        if let Err(e) =
+                            case_properties::set_case_properties(case_id.clone(), visibility, rows)
+                                .await
+                        {
+                            props_error.set(err_text(e));
+                            return false;
                         }
                     }
                 }
-                if is_site_admin {
-                    if let Err(e) = cases::set_case_owner(case_id.clone(), owner).await {
-                        edit_error.set(err_text(e));
-                        return;
-                    }
-                }
-
-                for visibility in Visibility::ALL {
-                    if visibility.is_restricted() && !can_see_restricted {
-                        continue;
-                    }
-                    let rows = properties
-                        .iter()
-                        .filter(|row| row.visibility == visibility)
-                        .map(|row| CaseProperty {
-                            key: row.key.get_untracked(),
-                            value: row.value.get_untracked(),
-                            section: row.section.get_untracked(),
-                            visibility,
-                        })
-                        .collect();
-                    if let Err(e) =
-                        case_properties::set_case_properties(case_id.clone(), visibility, rows)
-                            .await
-                    {
-                        props_error.set(err_text(e));
-                        return;
-                    }
-                }
+                true
+            }
+            .await;
+            saving.set(false);
+            if !saved {
+                return;
             }
             edit_error.set(String::new());
             props_error.set(String::new());
@@ -1057,7 +1077,7 @@ pub fn CaseDetail(
                 let (heading, container_class, header_class) = match visibility {
                     Visibility::VolunteerOnly => (
                         "Volunteer only",
-                        "overflow-hidden rounded-xl border border-amber-500/30 bg-slate-900",
+                        "overflow-hidden rounded-card border border-amber-500/30 bg-slate-900 shadow-card",
                         "border-b border-amber-500/20 bg-amber-500/10 px-4 py-4",
                     ),
                     Visibility::Shared => (
@@ -1655,9 +1675,10 @@ pub fn CaseDetail(
                     <div class="flex shrink-0 items-center gap-2">
                         <button
                             on:click=save_edit
-                            class="rounded-full bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700"
+                            prop:disabled=move || saving.get()
+                            class="rounded-full bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-60"
                         >
-                            "Save"
+                            {move || if saving.get() { "Saving\u{2026}" } else { "Save" }}
                         </button>
                         <button
                             on:click=cancel_edit
@@ -1673,10 +1694,18 @@ pub fn CaseDetail(
                 view! {
                     <div class="flex flex-wrap gap-2">
                         {has_operations_admin_permissions.then(|| view! {
-                            <A href="/admin/users" attr:class=header_button>"Case access"</A>
+                            <A href=access_href.get_value() attr:class=header_button>"Case access"</A>
                         })}
                         {is_site_admin.then(|| view! {
-                            <button on:click=begin_edit class=header_button>"Reassign"</button>
+                            <button
+                                on:click=move |ev| {
+                                    begin_edit(ev);
+                                    owner_picker_open.set(true);
+                                }
+                                class=header_button
+                            >
+                                "Reassign"
+                            </button>
                         })}
                         <button on:click=begin_edit class=format!("inline-flex items-center gap-2 {header_button}")>
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg>
@@ -1813,7 +1842,13 @@ pub fn CaseDetail(
             let court = c
                 .properties
                 .iter()
-                .find(|p| p.key == "Court" && !p.value.trim().is_empty())
+                .filter(|p| !p.value.trim().is_empty())
+                .find(|p| p.key == "Court location")
+                .or_else(|| {
+                    c.properties
+                        .iter()
+                        .find(|p| p.key == "Court" && !p.value.trim().is_empty())
+                })
                 .map(|p| p.value.clone());
             return view! {
                 <section>
@@ -2095,7 +2130,7 @@ pub fn CaseDetail(
                     }
                 }}
             }
-                .into_any()
+            .into_any()
         } else {
             ().into_any()
         }
@@ -2173,6 +2208,7 @@ pub fn CaseDetail(
                     properties=overview_properties.get()
                     client_first_name=client_first_name.get_value()
                     show_intake=state.is_volunteer_or_admin() && can_read_case_material
+                    show_case_info=can_read_case_material
                     show_people=has_information_management_access
                     can_edit_people=can_edit && has_information_management_access
                     show_plan=state.is_volunteer_or_admin() && can_read_case_material
@@ -2183,9 +2219,16 @@ pub fn CaseDetail(
             }
         };
         let shown_on = move |tabs: &'static [CaseTab]| {
-            move || if tabs.contains(&tab.get()) { "space-y-6" } else { "hidden" }
+            move || {
+                if tabs.contains(&tab.get()) {
+                    "space-y-6"
+                } else {
+                    "hidden"
+                }
+            }
         };
-        let tab_note_view = move || match tab.get() {
+        let tab_note_view = move || {
+            match tab.get() {
             CaseTab::Legal => tab_note(
                 "Legal work isn't tracked here yet. Court orders filed on this case are below.",
             )
@@ -2210,6 +2253,7 @@ pub fn CaseDetail(
             }
             .into_any(),
             _ => ().into_any(),
+        }
         };
         view! {
             <CaseTabBar

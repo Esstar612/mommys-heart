@@ -5,12 +5,14 @@ use leptos_router::components::A;
 use crate::components::case_contacts::CaseContactsPanel;
 use crate::components::case_plan::CasePlanCard;
 use crate::components::case_questionnaires::intake_status;
+use crate::helpers::format::initials;
 use crate::helpers::visibility::Visibility;
 use crate::server_fns::case_contacts::{list_case_contacts, CaseContact, CaseContactRole};
 use crate::server_fns::case_notes::{
     list_case_notes, CaseNoteListFilters, CaseNoteListItem, CaseNoteState,
 };
 use crate::server_fns::case_properties::CaseProperty;
+use crate::server_fns::err_text;
 use crate::state::AppState;
 
 const CARD: &str =
@@ -27,6 +29,7 @@ pub fn CaseOverview(
     properties: Vec<CaseProperty>,
     client_first_name: String,
     show_intake: bool,
+    show_case_info: bool,
     show_people: bool,
     can_edit_people: bool,
     show_plan: bool,
@@ -43,24 +46,58 @@ pub fn CaseOverview(
     );
     let case_sv = StoredValue::new(case_id.clone());
     let notes = RwSignal::new(Vec::<CaseNoteListItem>::new());
+    let drafts = RwSignal::new(Vec::<CaseNoteListItem>::new());
+    let notes_loading = RwSignal::new(true);
+    let notes_error = RwSignal::new(String::new());
     let contacts = RwSignal::new(Vec::<CaseContact>::new());
+    let contacts_error = RwSignal::new(String::new());
     let managing_people = RwSignal::new(false);
 
     {
         let case_id = case_id.clone();
         spawn_local(async move {
-            if let Ok(page) = list_case_notes(case_id, CaseNoteListFilters::default(), 0, 20).await
-            {
-                notes.set(page.items);
+            let recent =
+                list_case_notes(case_id.clone(), CaseNoteListFilters::default(), 0, 20).await;
+            let draft_filter = CaseNoteListFilters {
+                state: Some(CaseNoteState::Draft),
+                ..CaseNoteListFilters::default()
+            };
+            let own_drafts = list_case_notes(case_id, draft_filter, 0, 100).await;
+            let _ = notes_loading.try_set(false);
+            match (recent, own_drafts) {
+                (Ok(recent), Ok(own_drafts)) => {
+                    let _ = notes.try_set(recent.items);
+                    let _ = drafts.try_set(own_drafts.items);
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    let _ = notes_error.try_set(err_text(e));
+                }
             }
         });
     }
-    if show_people {
-        let case_id = case_id.clone();
+    let load_contacts = move || {
+        let case_id = case_sv.get_value();
         spawn_local(async move {
-            if let Ok(found) = list_case_contacts(case_id).await {
-                contacts.set(found);
+            match list_case_contacts(case_id).await {
+                Ok(found) => {
+                    let _ = contacts.try_set(found);
+                    let _ = contacts_error.try_set(String::new());
+                }
+                Err(e) => {
+                    let _ = contacts_error.try_set(err_text(e));
+                }
             }
+        });
+    };
+    if show_people {
+        load_contacts();
+        // The summary reflects changes made in the full list once it closes.
+        Effect::new(move |was_open: Option<bool>| {
+            let open = managing_people.get();
+            if was_open == Some(true) && !open {
+                load_contacts();
+            }
+            open
         });
     }
 
@@ -90,10 +127,10 @@ pub fn CaseOverview(
     };
 
     let draft_items = move || {
-        notes
+        drafts
             .get()
             .into_iter()
-            .filter(|n| n.state == CaseNoteState::Draft && viewer_id.with_value(|v| n.author_user_id == *v))
+            .filter(|n| viewer_id.with_value(|v| n.author_user_id == *v))
             .map(|n| {
                 let href = format!("/cases/{}/notes/{}", case_sv.get_value(), n.id);
                 view! {
@@ -119,15 +156,12 @@ pub fn CaseOverview(
     };
 
     let needs_count = move || {
-        let drafts = notes.with(|all| {
+        let own_drafts = drafts.with(|all| {
             all.iter()
-                .filter(|n| {
-                    n.state == CaseNoteState::Draft
-                        && viewer_id.with_value(|v| n.author_user_id == *v)
-                })
+                .filter(|n| viewer_id.with_value(|v| n.author_user_id == *v))
                 .count()
         });
-        drafts + usize::from(show_intake && intake_active > 0)
+        own_drafts + usize::from(show_intake && intake_active > 0)
     };
 
     let needs_you = view! {
@@ -143,7 +177,16 @@ pub fn CaseOverview(
             </div>
             <Show
                 when=move || { needs_count() > 0 }
-                fallback=|| view! { <p class="mt-3 text-sm text-slate-500">"Nothing needs you on this case right now."</p> }
+                fallback=move || {
+                    let message = if notes_loading.get() {
+                        "Loading\u{2026}".to_string()
+                    } else if !notes_error.get().is_empty() {
+                        notes_error.get()
+                    } else {
+                        "Nothing needs you on this case right now.".to_string()
+                    };
+                    view! { <p class="mt-3 text-sm text-slate-500">{message}</p> }
+                }
             >
                 <ul class="mt-1 divide-y divide-slate-800">
                     {intake_item.clone()}
@@ -166,6 +209,9 @@ pub fn CaseOverview(
                         <button type="button" on:click=manage class=SMALL_BUTTON>"+ Add"</button>
                     })}
                 </div>
+                <Show when=move || !contacts_error.get().is_empty()>
+                    <p class="mt-3 text-sm text-rose-400">{move || contacts_error.get()}</p>
+                </Show>
                 <ul class="mt-4 space-y-4">
                     {move || {
                         contacts
@@ -186,7 +232,7 @@ pub fn CaseOverview(
                                             <p class="text-sm text-slate-500">{detail}</p>
                                         </div>
                                         {can_edit_people.then(|| view! {
-                                            <button type="button" on:click=manage class=SMALL_BUTTON>"Edit"</button>
+                                            <button type="button" on:click=manage class=SMALL_BUTTON>"Manage"</button>
                                         })}
                                     </li>
                                 }
@@ -302,7 +348,14 @@ pub fn CaseOverview(
                     })
                     .collect();
                 if items.is_empty() {
-                    view! { <p class="mt-4 text-sm text-slate-500">"No notes on this case yet."</p> }.into_any()
+                    let message = if notes_loading.get() {
+                        "Loading\u{2026}".to_string()
+                    } else if !notes_error.get().is_empty() {
+                        notes_error.get()
+                    } else {
+                        "No notes on this case yet.".to_string()
+                    };
+                    view! { <p class="mt-4 text-sm text-slate-500">{message}</p> }.into_any()
                 } else {
                     view! {
                         <ol class="mt-4 ml-1.5 space-y-3.5 border-l-2 border-slate-800 pl-[18px]">{items}</ol>
@@ -327,7 +380,7 @@ pub fn CaseOverview(
             </div>
             <aside class="space-y-6" aria-label="Case at a glance">
                 {people_summary}
-                {case_info}
+                {show_case_info.then_some(case_info)}
                 {recent_activity}
             </aside>
         </div>
@@ -336,14 +389,6 @@ pub fn CaseOverview(
 
 fn short_date(raw: &str) -> String {
     raw.get(..10).unwrap_or(raw).to_string()
-}
-
-fn initials(name: &str) -> String {
-    name.split_whitespace()
-        .filter_map(|part| part.chars().next())
-        .take(2)
-        .collect::<String>()
-        .to_uppercase()
 }
 
 pub(crate) fn month_day(raw: &str) -> String {
