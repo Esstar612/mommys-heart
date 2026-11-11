@@ -584,6 +584,7 @@ pub fn CaseDetail(
     // server-side, so the UI hides the write affordances too.
     let accepts_changes = summary.status.accepts_changes();
     let can_edit = caps.contains(&CaseCapability::EditCase) && accepts_changes;
+    let can_upload_evidence = caps.contains(&CaseCapability::UploadEvidence);
     let role = state
         .current_user_summary
         .with_untracked(|user| user.as_ref().map(|user| user.role));
@@ -752,6 +753,8 @@ pub fn CaseDetail(
 
     let begin_edit = move |_| {
         if let Some(c) = live_case() {
+            tab.set(CaseTab::Intake);
+            open_folder.set("Intake".to_string());
             edit_name.set(c.name.clone());
             edit_status.set(c.status.slug().to_string());
             edit_owner.set(c.owner_id.clone());
@@ -1124,7 +1127,10 @@ pub fn CaseDetail(
                         listing.set(Some(found));
                         docs_error.set(String::new());
                     }
-                    Err(e) => docs_error.set(err_text(e)),
+                    Err(e) => {
+                        listing.set(None);
+                        docs_error.set(err_text(e));
+                    }
                 }
                 docs_loading.set(false);
             });
@@ -1378,8 +1384,21 @@ pub fn CaseDetail(
                 return view! { <Loading label="Loading documents\u{2026}" /> }.into_any();
             }
             let Some(found) = listing.get() else {
+                let retry = (can_upload_evidence && !docs_error.get().is_empty()).then(|| {
+                    view! {
+                        <button
+                            on:click=provision_documents
+                            class="mt-3 rounded-lg border border-primary-500/40 px-3 py-1.5 text-sm font-medium text-primary-300 hover:bg-primary-500/10"
+                        >
+                            "Set up documents folder"
+                        </button>
+                    }
+                });
                 return view! {
-                    <p class="text-sm text-slate-500">"Documents are unavailable right now."</p>
+                    <div>
+                        <p class="text-sm text-slate-500">"Documents are unavailable right now."</p>
+                        {retry}
+                    </div>
                 }
                 .into_any();
             };
@@ -2111,6 +2130,16 @@ pub fn CaseDetail(
         let tabs: Vec<CaseTab> = CaseTab::ALL
             .into_iter()
             .filter(|t| *t != CaseTab::Activity || has_operations_admin_permissions)
+            .filter(|t| {
+                can_read_case_material
+                    || matches!(
+                        t,
+                        CaseTab::Overview
+                            | CaseTab::CareerBuilding
+                            | CaseTab::CaseNotes
+                            | CaseTab::Activity
+                    )
+            })
             .collect();
         let select_tab = Callback::new(move |t: CaseTab| {
             tab.set(t);
@@ -2118,43 +2147,36 @@ pub fn CaseDetail(
                 open_folder.set(folder.to_string());
             }
         });
-        let tab_content = move || match tab.get() {
-            CaseTab::Overview => view! { {intake_tasks()} {people_panel()} }.into_any(),
-            CaseTab::Intake => view! { {case_information()} {documents_panel()} }.into_any(),
-            CaseTab::Legal => view! {
-                {tab_note("Legal work isn't tracked here yet. Court orders filed on this case are below.")}
-                {documents_panel()}
-            }
+        // Every section stays mounted and is hidden off its tab, so switching
+        // tabs keeps filters and half-typed input and does not refetch.
+        let shown_on = move |tabs: &'static [CaseTab]| {
+            move || if tabs.contains(&tab.get()) { "space-y-6" } else { "hidden" }
+        };
+        let tab_note_view = move || match tab.get() {
+            CaseTab::Legal => tab_note(
+                "Legal work isn't tracked here yet. Court orders filed on this case are below.",
+            )
             .into_any(),
+            CaseTab::SocialServices => {
+                tab_note("Social services work isn't tracked here yet. Its documents are below.")
+                    .into_any()
+            }
+            CaseTab::CareerBuilding => {
+                tab_note("Career building work isn't tracked here yet.").into_any()
+            }
+            CaseTab::Closing => {
+                tab_note("Closing work isn't tracked here yet. Closing documents are below.")
+                    .into_any()
+            }
             CaseTab::ClientCommunications => view! {
                 <p class="px-1 text-sm text-slate-400">
                     "Messages with the client happen in "
                     <A href="/inbox" attr:class="text-primary-300 hover:text-primary-200">"Case Chat"</A>
                     ". Saved emails and texts are below."
                 </p>
-                {documents_panel()}
             }
             .into_any(),
-            CaseTab::SocialServices => view! {
-                {tab_note("Social services work isn't tracked here yet. Its documents are below.")}
-                {documents_panel()}
-            }
-            .into_any(),
-            CaseTab::CareerBuilding => {
-                tab_note("Career building work isn't tracked here yet.").into_any()
-            }
-            CaseTab::CaseNotes => view! {
-                <CaseNotesPanel case_id=case_sv.get_value() can_add=can_note />
-                {documents_panel()}
-            }
-            .into_any(),
-            CaseTab::OtherDocuments => documents_panel().into_any(),
-            CaseTab::Activity => change_log_panel(),
-            CaseTab::Closing => view! {
-                {tab_note("Closing work isn't tracked here yet. Closing documents are below.")}
-                {documents_panel()}
-            }
-            .into_any(),
+            _ => ().into_any(),
         };
         view! {
             <CaseTabBar tabs=tabs active=tab on_select=select_tab />
@@ -2164,7 +2186,16 @@ pub fn CaseDetail(
                 aria-labelledby=move || tab.get().tab_id()
                 class="space-y-6"
             >
-                {tab_content}
+                <div class=shown_on(&[CaseTab::Overview])>{intake_tasks} {people_panel}</div>
+                <div class=shown_on(&[CaseTab::Intake])>{case_information}</div>
+                <div class=shown_on(&[CaseTab::CaseNotes])>
+                    <CaseNotesPanel case_id=case_sv.get_value() can_add=can_note />
+                </div>
+                <div class=shown_on(&[CaseTab::Activity])>{change_log_panel}</div>
+                {tab_note_view}
+                <div class=move || if tab.get().folder().is_some() { "" } else { "hidden" }>
+                    {documents_panel}
+                </div>
             </div>
         }
         .into_any()
