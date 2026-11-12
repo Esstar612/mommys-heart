@@ -25,7 +25,7 @@ const RECENT_LIMIT: usize = 4;
 #[component]
 pub fn CaseOverview(
     case_id: String,
-    properties: Vec<CaseProperty>,
+    properties: Signal<Vec<CaseProperty>>,
     client_first_name: String,
     show_intake: bool,
     show_case_info: bool,
@@ -98,8 +98,9 @@ pub fn CaseOverview(
         });
     }
 
-    let (intake_active, intake_summary) = intake_status(&properties);
+    let intake = Memo::new(move |_| properties.with(|all| intake_status(all)));
     let intake_item = move || {
+        let (intake_active, intake_summary) = intake.get();
         (show_intake && intake_active > 0).then(|| {
             view! {
                 <li class="flex flex-wrap items-center justify-between gap-3 py-3">
@@ -158,7 +159,7 @@ pub fn CaseOverview(
                 .filter(|n| viewer_id.with_value(|v| n.author_user_id == *v))
                 .count()
         });
-        own_drafts + usize::from(show_intake && intake_active > 0)
+        own_drafts + usize::from(show_intake && intake.with(|(active, _)| *active > 0))
     };
 
     let needs_you = view! {
@@ -250,11 +251,6 @@ pub fn CaseOverview(
         .into_any()
     };
 
-    let (shared, restricted): (Vec<CaseProperty>, Vec<CaseProperty>) = properties
-        .iter()
-        .cloned()
-        .partition(|p| p.visibility == Visibility::Shared);
-    let restricted_sections = section_fill_counts(&restricted);
     let client_label = if client_first_name.is_empty() {
         "The client can see these".to_string()
     } else {
@@ -270,8 +266,10 @@ pub fn CaseOverview(
                 {client_label}
             </p>
             <dl class="mt-2 space-y-2 text-[14.5px]">
-                {shared
+                {move || properties
+                    .get()
                     .into_iter()
+                    .filter(|p| p.visibility == Visibility::Shared)
                     .filter(|p| !p.value.trim().is_empty())
                     .map(|p| view! {
                         <div class="flex justify-between gap-3">
@@ -281,7 +279,16 @@ pub fn CaseOverview(
                     })
                     .collect::<Vec<_>>()}
             </dl>
-            {(!restricted_sections.is_empty()).then(|| {
+            {move || {
+                let restricted_sections = properties.with(|all| {
+                    let restricted: Vec<CaseProperty> = all
+                        .iter()
+                        .filter(|p| p.visibility != Visibility::Shared)
+                        .cloned()
+                        .collect();
+                    section_fill_counts(&restricted)
+                });
+                (!restricted_sections.is_empty()).then(|| {
                 let last = restricted_sections.len() - 1;
                 view! {
                     <div class="mt-4 rounded-[14px] border border-[#fcd34d] bg-[#fffdf5] px-4 py-3.5">
@@ -308,7 +315,8 @@ pub fn CaseOverview(
                         </p>
                     </div>
                 }
-            })}
+                })
+            }}
         </section>
     };
 
