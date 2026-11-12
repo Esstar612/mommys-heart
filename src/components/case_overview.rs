@@ -191,7 +191,7 @@ pub fn CaseOverview(
                 }
             >
                 <ul class="mt-1 divide-y divide-slate-800">
-                    {intake_item.clone()}
+                    {intake_item}
                     {draft_items}
                 </ul>
             </Show>
