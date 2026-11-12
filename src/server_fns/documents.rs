@@ -499,8 +499,6 @@ pub async fn provision_case_documents(case_id: String) -> Result<(), ServerFnErr
     Ok(())
 }
 
-/// The folders directly under the case root, for an operations admin choosing
-/// one to link a case to.
 #[server(prefix = "/api")]
 pub async fn case_folder_choices() -> Result<Vec<String>, ServerFnError> {
     use crate::server::permissions::{require_operations_admin, require_user};
@@ -521,8 +519,6 @@ pub async fn case_folder_choices() -> Result<Vec<String>, ServerFnError> {
         .collect())
 }
 
-/// Link a case to a folder that already exists under the case root (requires
-/// operations admin).
 #[server(prefix = "/api")]
 pub async fn link_case_documents_folder(
     case_id: String,

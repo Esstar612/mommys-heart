@@ -85,13 +85,6 @@ pub async fn ensure_case_folder(case_id: &str) -> Result<db::CaseFolderRef, Stri
     })
 }
 
-/// Point a case at a folder that already sits directly under the case root,
-/// such as a client folder filed by hand before the CRM existed.
-///
-/// Invitations on the old folder are withdrawn first and reissued on the new
-/// one, so nobody keeps access to a folder the case no longer uses. A revoke
-/// that fails stops the link before anything moves, and pressing it again
-/// retries.
 pub async fn link_case_folder(
     case_id: &str,
     folder_name: &str,
