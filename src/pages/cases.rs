@@ -596,7 +596,7 @@ pub fn CaseDetail(
     // server-side, so the UI hides the write affordances too.
     let accepts_changes = summary.status.accepts_changes();
     let can_edit = caps.contains(&CaseCapability::EditCase) && accepts_changes;
-    let can_upload_evidence = caps.contains(&CaseCapability::UploadEvidence);
+    let can_upload_evidence = caps.contains(&CaseCapability::UploadEvidence) && accepts_changes;
     let role = state
         .current_user_summary
         .with_untracked(|user| user.as_ref().map(|user| user.role));
@@ -774,8 +774,12 @@ pub fn CaseDetail(
 
     let begin_edit = move |_| {
         if let Some(c) = live_case() {
-            tab.set(CaseTab::Intake);
-            open_folder.set("Intake".to_string());
+            // Clients keep the single-page layout, and the Intake folder is
+            // volunteer-only, so only staff who can see it are moved there.
+            if !is_client && can_read_case_material {
+                tab.set(CaseTab::Intake);
+                open_folder.set(CaseTab::Intake.folder().unwrap_or_default().to_string());
+            }
             edit_name.set(c.name.clone());
             edit_status.set(c.status.slug().to_string());
             edit_owner.set(c.owner_id.clone());
@@ -1417,7 +1421,9 @@ pub fn CaseDetail(
                 return view! { <Loading label="Loading documents\u{2026}" /> }.into_any();
             }
             let Some(found) = listing.get() else {
-                let retry = (can_upload_evidence && !docs_error.get().is_empty()).then(|| {
+                let retry = (can_upload_evidence
+                    && docs_error.get() == documents::MISSING_FOLDER)
+                    .then(|| {
                     view! {
                         <button
                             on:click=provision_documents
