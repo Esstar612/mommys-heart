@@ -1675,26 +1675,7 @@ pub fn CaseDetail(
                 }
                 .into_any()
             };
-            let edit_controls = if editing.get() {
-                view! {
-                    <div class="flex shrink-0 items-center gap-2">
-                        <button
-                            on:click=save_edit
-                            prop:disabled=move || saving.get()
-                            class="rounded-full bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-60"
-                        >
-                            {move || if saving.get() { "Saving\u{2026}" } else { "Save" }}
-                        </button>
-                        <button
-                            on:click=cancel_edit
-                            class="rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-950"
-                        >
-                            "Cancel"
-                        </button>
-                    </div>
-                }
-                .into_any()
-            } else if can_manage_case_information {
+            let edit_controls = if can_manage_case_information {
                 let header_button = "shrink-0 rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-950";
                 view! {
                     <div class="flex flex-wrap gap-2">
@@ -1957,9 +1938,10 @@ pub fn CaseDetail(
                     <div class="flex items-center gap-2">
                         <button
                             on:click=save_edit
-                            class="shrink-0 rounded-lg bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600"
+                            prop:disabled=move || saving.get()
+                            class="shrink-0 rounded-lg bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
                         >
-                            "Save"
+                            {move || if saving.get() { "Saving\u{2026}" } else { "Save" }}
                         </button>
                         <button
                             on:click=cancel_edit
