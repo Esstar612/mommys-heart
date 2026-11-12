@@ -209,10 +209,14 @@ async fn authorize_task_update(
     Ok(owner.case_id)
 }
 
-/// A date the plan schedules work for must not be in the past.
+/// A date the plan schedules work for must not be in the past. A day of slack,
+/// because the server's clock may run ahead of the user's time zone.
 #[cfg(feature = "ssr")]
 fn reject_past(date: &str, label: &str) -> Result<(), ServerFnError> {
-    if !date.is_empty() && date < crate::helpers::dates::today().as_str() {
+    let earliest = (chrono::Local::now() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    if !date.is_empty() && date < earliest.as_str() {
         return Err(ServerFnError::new(format!("{label} can't be in the past.")));
     }
     Ok(())
