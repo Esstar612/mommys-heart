@@ -185,6 +185,9 @@ pub fn CasePlanCard(case_id: String, can_edit: bool, can_note: bool) -> impl Int
         })
     };
 
+    // One callback for every row, so a save that finishes after another
+    // save rebuilt the list still reloads it.
+    let on_saved = Callback::new(move |_| reload());
     let item = move |row: PlanRow| {
         let can_update =
             can_edit || (can_note && viewer_id.with_value(|v| *v == row.task.assignee_id));
@@ -193,7 +196,7 @@ pub fn CasePlanCard(case_id: String, can_edit: bool, can_note: bool) -> impl Int
                 row=row
                 today=today.get_value()
                 can_update=can_update
-                on_saved=Callback::new(move |_| reload())
+                on_saved=on_saved
             />
         }
     };
@@ -268,6 +271,11 @@ pub fn CasePlanCard(case_id: String, can_edit: bool, can_note: bool) -> impl Int
             {add_form}
             <Show when=move || !error.get().is_empty()>
                 <p role="alert" class="mt-3 text-sm text-rose-300">{move || error.get()}</p>
+            </Show>
+            <Show when=move || {
+                !load_error.get().is_empty() && rows.with(|(open, closed)| !open.is_empty() || !closed.is_empty())
+            }>
+                <p role="alert" class="mt-3 text-sm text-rose-300">{move || load_error.get()}</p>
             </Show>
             {open_list}
             {closed_list}
