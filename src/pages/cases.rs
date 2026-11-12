@@ -2190,7 +2190,7 @@ pub fn CaseDetail(
             view! {
                 <CaseOverview
                     case_id=case_sv.get_value()
-                    properties=overview_properties.get()
+                    properties=Signal::from(overview_properties)
                     client_first_name=client_first_name.get_value()
                     show_intake=state.is_volunteer_or_admin() && can_read_case_material
                     show_case_info=can_read_case_material
