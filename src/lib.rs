@@ -20,6 +20,8 @@ pub mod components {
     pub mod admin_user_card;
     pub mod admin_volunteers;
     pub mod case_contacts;
+    pub mod case_overview;
+    pub mod case_plan;
     pub mod case_questionnaires;
     pub mod case_tabs;
     pub mod category_picker;

@@ -3,8 +3,8 @@ use leptos::task::spawn_local;
 use leptos_router::components::A;
 use leptos_router::hooks::use_navigate;
 
-use crate::components::case_contacts::CaseContactsPanel;
-use crate::components::case_questionnaires::CaseIntakeTaskSummary;
+use crate::components::case_overview::CaseOverview;
+use crate::components::case_questionnaires::{intake_status, CaseIntakeTaskSummary};
 use crate::components::case_tabs::{CaseTab, CaseTabBar};
 use crate::components::change_log::ChangeLog;
 use crate::components::guard::require_login;
@@ -154,8 +154,31 @@ async fn upload_document_file(
         .map_err(crate::server_fns::err_text)
 }
 
-fn badge(classes: &str) -> String {
-    format!("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {classes}")
+fn status_pill(status: CaseStatus) -> impl IntoView {
+    let icon = match status {
+        CaseStatus::Open => view! {
+            <svg viewBox="0 0 16 16" class="h-2 w-2" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"></circle></svg>
+        }
+        .into_any(),
+        CaseStatus::Closed => view! {
+            <svg viewBox="0 0 24 24" class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="3.5" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg>
+        }
+        .into_any(),
+        CaseStatus::Declined | CaseStatus::Withdrawn => view! {
+            <svg viewBox="0 0 24 24" class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="3.5" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        }
+        .into_any(),
+        CaseStatus::PendingReview | CaseStatus::Monitor => view! {
+            <svg viewBox="0 0 24 24" class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+        }
+        .into_any(),
+    };
+    view! {
+        <span class=format!("inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium {}", status.badge_classes())>
+            {icon}
+            {status.label()}
+        </span>
+    }
 }
 
 /// A short label summarizing a user's access to a case from their capabilities.
@@ -197,7 +220,7 @@ pub fn CaseHomePage() -> impl IntoView {
     // relative to the case folder. Kept here so it survives the reload every
     // case mutation triggers.
     let open_folder = RwSignal::new(String::new());
-    // The open case's tab, kept here for the same reason as `open_folder`.
+    // Kept here so the open tab survives CaseDetail remounting on reload.
     let tab = RwSignal::new(CaseTab::Overview);
 
     // The fetched window of case summaries plus the total match count. `query`
@@ -262,28 +285,13 @@ pub fn CaseHomePage() -> impl IntoView {
                     let case_id = c.id.clone();
                     let is_selected = {
                         let case_id = case_id.clone();
-                        move || selected.get().as_deref() == Some(case_id.as_str())
+                        Memo::new(move |_| selected.get().as_deref() == Some(case_id.as_str()))
                     };
-                    let caps = c.capabilities.clone();
-                    let access_badge = access_label(&caps)
-                        .map(|(label, classes)| {
-                            view! { <span class=badge(classes)>{label}</span> }.into_any()
-                        })
-                        .unwrap_or_else(|| ().into_any());
-                    let inactive_badge = c
-                        .inactive
-                        .then(|| {
-                            view! {
-                                <span class=badge("bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-500/30")>
-                                    "\u{26a0} No activity in 30+ days"
-                                </span>
-                            }
-                            .into_any()
-                        })
-                        .unwrap_or_else(|| ().into_any());
+                    let owner = c.owner_full_name();
+                    let owner_title = owner.clone();
+                    let inactive = c.inactive;
                     let status = c.status;
                     let name = c.name.clone();
-                    let owner = c.owner_full_name();
                     let select = {
                         let case_id = case_id.clone();
                         move |_| {
@@ -295,24 +303,28 @@ pub fn CaseHomePage() -> impl IntoView {
                     view! {
                     <button
                         on:click=select
+                        aria-current=move || is_selected.get().then_some("true")
                         class=move || {
-                            let base = "w-full rounded-xl border p-4 text-left transition-colors";
-                            if is_selected() {
-                                format!("{base} border-primary-500/50 bg-slate-800")
+                            let base = "w-full rounded-2xl border px-4 py-3.5 text-left transition-colors";
+                            if is_selected.get() {
+                                format!("{base} border-slate-800 bg-slate-900 pl-5 shadow-[inset_4px_0_0_var(--color-primary-600),0_4px_14px_rgba(80,60,30,0.06)]")
                             } else {
-                                format!("{base} border-slate-800 bg-slate-900 hover:bg-slate-800")
+                                format!("{base} border-transparent hover:bg-slate-900")
                             }
                         }
                     >
-                        <div class="flex items-center justify-between gap-2">
-                            <span class="min-w-0 truncate font-medium">{name}</span>
-                            <span class=badge(status.badge_classes())>{status.label()}</span>
-                        </div>
-                        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                            <span>"Owner: " {owner}</span>
-                            {access_badge}
-                            {inactive_badge}
-                        </div>
+                        <span class=move || {
+                            if is_selected.get() { "block truncate font-bold" } else { "block truncate font-semibold" }
+                        }>{name}</span>
+                        <span class="mt-1.5 flex items-center gap-2">
+                            {status_pill(status)}
+                            <span class="min-w-0 truncate text-sm text-slate-500" title=owner_title>{owner}</span>
+                        </span>
+                        {inactive.then(|| view! {
+                            <span class="mt-1.5 flex items-center gap-1.5 text-sm font-semibold text-rose-200">
+                                "\u{26a0} No activity 30+ days"
+                            </span>
+                        })}
                     </button>
                 }
                 .into_any()
@@ -335,7 +347,7 @@ pub fn CaseHomePage() -> impl IntoView {
                     <button
                         on:click=move |_| window.update(|w| *w += PAGE_SIZE)
                         prop:disabled=move || loading.get()
-                        class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+                        class="rounded-full border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50"
                     >
                         {move || if loading.get() { "Loading\u{2026}" } else { "Load more" }}
                     </button>
@@ -377,8 +389,6 @@ pub fn CaseHomePage() -> impl IntoView {
     }
         };
 
-        let input_class = "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40";
-
         // Debounce the search: update the visible input immediately, but wait 1s of
         // idle typing before firing the fetch (and resetting the window).
         let mut on_search = debounce(std::time::Duration::from_secs(1), move |val: String| {
@@ -395,7 +405,7 @@ pub fn CaseHomePage() -> impl IntoView {
                 >
                     <A
                         href="/cases/new"
-                        attr:class="flex items-center justify-center rounded-xl border border-primary-500/40 bg-primary-500/10 px-4 py-3 text-sm font-semibold text-primary-200 hover:bg-primary-500/20"
+                        attr:class="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-950"
                     >
                         "+ New case"
                     </A>
@@ -413,7 +423,9 @@ pub fn CaseHomePage() -> impl IntoView {
                         </div>
                     </Show>
                     <input
-                        class=input_class
+                        type="search"
+                        aria-label="Search cases by name"
+                        class="w-full rounded-full border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40"
                         placeholder="Search cases by name"
                         prop:value=move || query.get()
                         on:input=move |ev| {
@@ -422,14 +434,14 @@ pub fn CaseHomePage() -> impl IntoView {
                             on_search(val);
                         }
                     />
-                    <div class="space-y-3">{cases_list}</div>
+                    <div class="space-y-1.5">{cases_list}</div>
                     {footer}
                 </div>
                 <div class="min-w-0 lg:block" class:hidden=move || selected.get().is_none()>
                     <Show when=move || selected.get().is_some()>
                         <button
                             on:click=move |_| selected.set(None)
-                            class="mb-4 inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 lg:hidden"
+                            class="mb-4 inline-flex items-center gap-1.5 rounded-full border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 lg:hidden"
                         >
                             "\u{2190} Back to cases"
                         </button>
@@ -454,7 +466,7 @@ pub fn NewCasePage() -> impl IntoView {
     let status = RwSignal::new(CaseStatus::Open.slug().to_string());
     let error = RwSignal::new(String::new());
 
-    let input_class = "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40";
+    let input_class = "w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40";
     let label_class = "block text-xs font-medium text-slate-400";
 
     require_login(state, move || {
@@ -482,7 +494,7 @@ pub fn NewCasePage() -> impl IntoView {
         view! {
         <Layout title="New case".to_string()>
             <div class="mx-auto max-w-2xl space-y-6">
-                <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 space-y-5">
+                <div class="rounded-card border border-slate-800 bg-slate-900 shadow-card p-6 space-y-5">
                     <div>
                         <label class=label_class>
                             "Case name "
@@ -538,13 +550,13 @@ pub fn NewCasePage() -> impl IntoView {
                     <div class="flex gap-3">
                         <button
                             on:click=submit
-                            class="rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600"
+                            class="rounded-full bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600"
                         >
                             "Create case"
                         </button>
                         <A
                             href="/cases"
-                            attr:class="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
+                            attr:class="rounded-full border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
                         >
                             "Cancel"
                         </A>
@@ -592,6 +604,14 @@ pub fn CaseDetail(
         role.is_some_and(|role| role.has_operations_admin_permissions());
     let has_information_management_access = state.has_information_management_access();
     let is_site_admin = role.is_some_and(|role| role.is_site_admin());
+    // The admin's own user page, where case capabilities are granted.
+    let access_href = StoredValue::new(
+        state
+            .current_user_summary
+            .get_untracked()
+            .map(|user| format!("/admin/users/{}", user.id))
+            .unwrap_or_else(|| "/admin/users".to_string()),
+    );
     let is_client = matches!(role, Some(AccountRole::Client));
     let can_note = caps.contains(&CaseCapability::AddNotes) && accepts_changes;
     // Withdrawal is an ownership right, not a case capability: signup grants the
@@ -633,6 +653,7 @@ pub fn CaseDetail(
     }
 
     let owner_name = StoredValue::new(summary.owner_full_name());
+    let client_first_name = StoredValue::new(summary.owner_first_name.clone());
 
     // Owner picker (edit mode only)
     let owner_query = RwSignal::new(String::new());
@@ -667,13 +688,14 @@ pub fn CaseDetail(
 
     let live_case = move || detail.get();
 
-    let input_class = "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40";
+    let input_class = "w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40";
     // The card styling shared by every panel on the page. Named `panel` rather
     // than `section` so it is never confused with a case information *section*.
-    let panel = "rounded-xl border border-slate-800 bg-slate-900 p-4";
+    let panel = "rounded-card border border-slate-800 bg-slate-900 shadow-card p-4";
 
     // --- global edit mode ---
     let editing = RwSignal::new(false);
+    let saving = RwSignal::new(false);
     let edit_name = RwSignal::new(String::new());
     let edit_status = RwSignal::new(String::new());
     let edit_owner = RwSignal::new(String::new());
@@ -798,49 +820,61 @@ pub fn CaseDetail(
         let owner = edit_owner.get_untracked();
         let can_see_restricted = state.is_volunteer_or_admin();
         let properties = edit_props.get_untracked();
+        if saving.get_untracked() {
+            return;
+        }
+        saving.set(true);
         spawn_local(async move {
-            if can_edit {
-                if let Err(e) = cases::set_case_name(case_id.clone(), name).await {
-                    edit_error.set(err_text(e));
-                    return;
-                }
-                if can_see_restricted {
-                    if let Some(s) = CaseStatus::from_slug(&status_slug) {
-                        if let Err(e) = cases::set_case_status(case_id.clone(), s).await {
+            let saved = async {
+                if can_edit {
+                    if let Err(e) = cases::set_case_name(case_id.clone(), name).await {
+                        edit_error.set(err_text(e));
+                        return false;
+                    }
+                    if can_see_restricted {
+                        if let Some(s) = CaseStatus::from_slug(&status_slug) {
+                            if let Err(e) = cases::set_case_status(case_id.clone(), s).await {
+                                edit_error.set(err_text(e));
+                                return false;
+                            }
+                        }
+                    }
+                    if is_site_admin {
+                        if let Err(e) = cases::set_case_owner(case_id.clone(), owner).await {
                             edit_error.set(err_text(e));
-                            return;
+                            return false;
+                        }
+                    }
+
+                    for visibility in Visibility::ALL {
+                        if visibility.is_restricted() && !can_see_restricted {
+                            continue;
+                        }
+                        let rows = properties
+                            .iter()
+                            .filter(|row| row.visibility == visibility)
+                            .map(|row| CaseProperty {
+                                key: row.key.get_untracked(),
+                                value: row.value.get_untracked(),
+                                section: row.section.get_untracked(),
+                                visibility,
+                            })
+                            .collect();
+                        if let Err(e) =
+                            case_properties::set_case_properties(case_id.clone(), visibility, rows)
+                                .await
+                        {
+                            props_error.set(err_text(e));
+                            return false;
                         }
                     }
                 }
-                if is_site_admin {
-                    if let Err(e) = cases::set_case_owner(case_id.clone(), owner).await {
-                        edit_error.set(err_text(e));
-                        return;
-                    }
-                }
-
-                for visibility in Visibility::ALL {
-                    if visibility.is_restricted() && !can_see_restricted {
-                        continue;
-                    }
-                    let rows = properties
-                        .iter()
-                        .filter(|row| row.visibility == visibility)
-                        .map(|row| CaseProperty {
-                            key: row.key.get_untracked(),
-                            value: row.value.get_untracked(),
-                            section: row.section.get_untracked(),
-                            visibility,
-                        })
-                        .collect();
-                    if let Err(e) =
-                        case_properties::set_case_properties(case_id.clone(), visibility, rows)
-                            .await
-                    {
-                        props_error.set(err_text(e));
-                        return;
-                    }
-                }
+                true
+            }
+            .await;
+            saving.set(false);
+            if !saved {
+                return;
             }
             edit_error.set(String::new());
             props_error.set(String::new());
@@ -943,7 +977,7 @@ pub fn CaseDetail(
                                                 rows.retain(|entry| entry.id != row.id)
                                             })
                                         }
-                                        class="shrink-0 rounded-lg border border-rose-500/40 px-3 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/10"
+                                        class="shrink-0 rounded-full border border-rose-500/40 px-3 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/10"
                                     >
                                         "Remove"
                                     </button>
@@ -959,7 +993,7 @@ pub fn CaseDetail(
                                     );
                                     edit_props.update(|rows| rows.push(row));
                                 }
-                                class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                                class="rounded-full border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800"
                             >
                                 "+ Add property"
                             </button>
@@ -1047,12 +1081,12 @@ pub fn CaseDetail(
                 let (heading, container_class, header_class) = match visibility {
                     Visibility::VolunteerOnly => (
                         "Volunteer only",
-                        "overflow-hidden rounded-xl border border-amber-500/30 bg-slate-900",
+                        "overflow-hidden rounded-card border border-amber-500/30 bg-slate-900 shadow-card",
                         "border-b border-amber-500/20 bg-amber-500/10 px-4 py-4",
                     ),
                     Visibility::Shared => (
                         "Shared with volunteers and client",
-                        "overflow-hidden rounded-xl border border-slate-800 bg-slate-900",
+                        "overflow-hidden rounded-card border border-slate-800 bg-slate-900 shadow-card",
                         "border-b border-slate-800 bg-slate-800/40 px-4 py-4",
                     ),
                 };
@@ -1359,7 +1393,7 @@ pub fn CaseDetail(
                         <a
                             href=download_url
                             download=entry.name.clone()
-                            class="rounded-lg border border-primary-500/40 px-2 py-1 font-medium text-primary-300 hover:bg-primary-500/10"
+                            class="rounded-full border border-primary-500/40 px-2 py-1 font-medium text-primary-300 hover:bg-primary-500/10"
                         >
                             "Download"
                         </a>
@@ -1394,7 +1428,7 @@ pub fn CaseDetail(
                     view! {
                         <button
                             on:click=provision_documents
-                            class="mt-3 rounded-lg border border-primary-500/40 px-3 py-1.5 text-sm font-medium text-primary-300 hover:bg-primary-500/10"
+                            class="mt-3 rounded-full border border-primary-500/40 px-3 py-1.5 text-sm font-medium text-primary-300 hover:bg-primary-500/10"
                         >
                             "Set up documents folder"
                         </button>
@@ -1416,7 +1450,7 @@ pub fn CaseDetail(
                     view! {
                         <button
                             on:click=provision_documents
-                            class="mt-3 rounded-lg border border-primary-500/40 px-3 py-1.5 text-sm font-medium text-primary-300 hover:bg-primary-500/10"
+                            class="mt-3 rounded-full border border-primary-500/40 px-3 py-1.5 text-sm font-medium text-primary-300 hover:bg-primary-500/10"
                         >
                             "Set up documents folder"
                         </button>
@@ -1530,7 +1564,7 @@ pub fn CaseDetail(
                             />
                             <button
                                 on:click=add_folder
-                                class="shrink-0 rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                                class="shrink-0 rounded-full border border-slate-700 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
                             >
                                 "+ New folder"
                             </button>
@@ -1545,7 +1579,7 @@ pub fn CaseDetail(
                             <button
                                 on:click=upload_here
                                 prop:disabled=move || upload_busy.get()
-                                class="shrink-0 rounded-lg bg-primary-500 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
+                                class="shrink-0 rounded-full bg-primary-500 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
                             >
                                 {move || {
                                     if upload_busy.get() { "Uploading\u{2026}" } else { "Upload" }
@@ -1642,32 +1676,29 @@ pub fn CaseDetail(
                 }
                 .into_any()
             };
-            let edit_controls = if editing.get() {
+            let edit_controls = if can_manage_case_information {
+                let header_button = "shrink-0 rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-950";
                 view! {
-                    <div class="flex shrink-0 items-center gap-2">
-                        <button
-                            on:click=save_edit
-                            class="rounded-lg bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600"
-                        >
-                            "Save"
-                        </button>
-                        <button
-                            on:click=cancel_edit
-                            class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
-                        >
-                            "Cancel"
+                    <div class="flex flex-wrap gap-2">
+                        {has_operations_admin_permissions.then(|| view! {
+                            <A href=access_href.get_value() attr:class=header_button>"Case access"</A>
+                        })}
+                        {is_site_admin.then(|| view! {
+                            <button
+                                on:click=move |ev| {
+                                    begin_edit(ev);
+                                    owner_picker_open.set(true);
+                                }
+                                class=header_button
+                            >
+                                "Reassign"
+                            </button>
+                        })}
+                        <button on:click=begin_edit class=format!("inline-flex items-center gap-2 {header_button}")>
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg>
+                            "Edit case"
                         </button>
                     </div>
-                }
-                .into_any()
-            } else if can_manage_case_information {
-                view! {
-                    <button
-                        on:click=begin_edit
-                        class="shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800"
-                    >
-                        "Edit"
-                    </button>
                 }
                 .into_any()
             } else {
@@ -1692,7 +1723,7 @@ pub fn CaseDetail(
                             <p class="mt-1 text-xs text-slate-400">"Reason given: " {w.reason}</p>
                         });
                     view! {
-                        <div class="mt-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
+                        <div class="mt-3 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2">
                             <p class="text-xs text-slate-300">
                                 "Withdrawn by " {who} {when}
                                 ". Nothing was deleted \u{2014} the case is frozen and can be restored by an administrator."
@@ -1718,7 +1749,7 @@ pub fn CaseDetail(
                                     type="button"
                                     on:click=restore
                                     prop:disabled=move || withdraw_saving.get()
-                                    class="mt-3 rounded-lg border border-emerald-500/40 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
+                                    class="mt-3 rounded-full border border-emerald-500/40 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
                                 >
                                     {move || if withdraw_saving.get() { "Restoring\u{2026}" } else { "Restore case" }}
                                 </button>
@@ -1732,7 +1763,7 @@ pub fn CaseDetail(
                                                 withdrawing.set(true);
                                                 withdraw_error.set(String::new());
                                             }
-                                            class="mt-3 rounded-lg border border-rose-500/40 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/10"
+                                            class="mt-3 rounded-full border border-rose-500/40 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/10"
                                         >
                                             "Withdraw this case"
                                         </button>
@@ -1755,7 +1786,7 @@ pub fn CaseDetail(
                                                 id=withdraw_reason_id.get_value()
                                                 rows="2"
                                                 maxlength="1000"
-                                                class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+                                                class="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
                                                 placeholder="e.g. I filed this by mistake."
                                                 prop:disabled=move || withdraw_saving.get()
                                                 prop:value=move || withdraw_reason.get()
@@ -1766,7 +1797,7 @@ pub fn CaseDetail(
                                                     type="button"
                                                     on:click=confirm_withdraw
                                                     prop:disabled=move || withdraw_saving.get()
-                                                    class="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-50"
+                                                    class="rounded-full bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-50"
                                                 >
                                                     {move || if withdraw_saving.get() { "Withdrawing\u{2026}" } else { "Confirm withdrawal" }}
                                                 </button>
@@ -1777,7 +1808,7 @@ pub fn CaseDetail(
                                                         withdraw_error.set(String::new());
                                                     }
                                                     prop:disabled=move || withdraw_saving.get()
-                                                    class="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                                                    class="rounded-full border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-50"
                                                 >
                                                     "Keep the case"
                                                 </button>
@@ -1792,25 +1823,41 @@ pub fn CaseDetail(
                 }
             };
 
+            let access = access_label(&caps)
+                .filter(|_| !is_client)
+                .map(|(label, _)| format!(" \u{b7} {label}"));
+            let court = c
+                .properties
+                .iter()
+                .filter(|p| !p.value.trim().is_empty())
+                .find(|p| p.key == "Court location")
+                .or_else(|| {
+                    c.properties
+                        .iter()
+                        .find(|p| p.key == "Court" && !p.value.trim().is_empty())
+                })
+                .map(|p| p.value.clone());
             return view! {
-                <div class=panel>
-                    <div class="flex items-start justify-between gap-3">
+                <section>
+                    <div class="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
                         <div class="min-w-0">
-                            <h2 class="text-lg font-semibold">{c.name.clone()}</h2>
-                            <p class="mt-1 text-sm text-slate-400">
-                                "Filed by "
-                                <ProfileLink user_id=c.owner_id.clone() name=owner_name />
+                            <p class="flex flex-wrap items-center gap-2">
+                                {status_pill(status)}
+                                <span class="text-sm text-slate-500">
+                                    "Filed by "
+                                    <ProfileLink user_id=c.owner_id.clone() name=owner_name />
+                                    {access}
+                                </span>
                             </p>
+                            <h2 class="mt-2.5 text-4xl leading-tight font-semibold">{c.name.clone()}</h2>
+                            {court.map(|court| view! { <p class="mt-1.5 text-slate-500">{court}</p> })}
                             {terms_accepted.map(|accepted| view! {
                                 <p class="mt-1 text-xs text-slate-500">
                                     "Terms accepted " {accepted}
                                 </p>
                             })}
                         </div>
-                        <div class="flex shrink-0 items-center gap-2">
-                            <span class=badge(status.badge_classes())>{status.label()}</span>
-                            {edit_controls}
-                        </div>
+                        {edit_controls}
                     </div>
                     {client_banner}
                     {withdraw_panel}
@@ -1819,7 +1866,7 @@ pub fn CaseDetail(
                             "You have view-only access to this case."
                         </p>
                     </Show>
-                </div>
+                </section>
             }
             .into_any();
         }
@@ -1836,7 +1883,7 @@ pub fn CaseDetail(
                     <div
                         id=owner_results_id.get_value()
                         role="listbox"
-                        class="absolute z-10 mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-500"
+                        class="absolute z-10 mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-500"
                     >
                         "No matching users."
                     </div>
@@ -1881,7 +1928,7 @@ pub fn CaseDetail(
                 <div
                     id=owner_results_id.get_value()
                     role="listbox"
-                    class="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-slate-700 bg-slate-950"
+                    class="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-slate-700 bg-slate-900"
                 >
                     {rows}
                 </div>
@@ -1895,13 +1942,14 @@ pub fn CaseDetail(
                     <div class="flex items-center gap-2">
                         <button
                             on:click=save_edit
-                            class="shrink-0 rounded-lg bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600"
+                            prop:disabled=move || saving.get()
+                            class="shrink-0 rounded-full bg-primary-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
                         >
-                            "Save"
+                            {move || if saving.get() { "Saving\u{2026}" } else { "Save" }}
                         </button>
                         <button
                             on:click=cancel_edit
-                            class="shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
+                            class="shrink-0 rounded-full border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
                         >
                             "Cancel"
                         </button>
@@ -2070,24 +2118,9 @@ pub fn CaseDetail(
                     }
                 }}
             }
-                .into_any()
-        } else {
-            ().into_any()
-        }
-    };
-
-    // People on the case: staff-only, like Case Notes.
-    let people_panel = move || {
-        if is_client || !has_information_management_access {
-            ().into_any()
-        } else {
-            view! {
-                <CaseContactsPanel
-                    case_id=case_sv.get_value()
-                    can_edit=can_edit && has_information_management_access
-                />
-            }
             .into_any()
+        } else {
+            ().into_any()
         }
     };
 
@@ -2102,7 +2135,7 @@ pub fn CaseDetail(
                             on:click=move |_| log_open.update(|o| *o = !*o)
                             aria-expanded=move || log_open.get().to_string()
                             aria-controls=log_region_id.get_value()
-                            class="rounded-lg border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                            class="rounded-full border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
                         >
                             {move || if log_open.get() { "Hide" } else { "Open change log" }}
                         </button>
@@ -2120,7 +2153,6 @@ pub fn CaseDetail(
         view! { <p class="px-1 text-sm text-slate-400">{text}</p> }
     };
 
-    // Clients keep the single-page layout; the tabs organize staff work.
     let sections = if is_client {
         view! {
             {documents_panel}
@@ -2155,10 +2187,37 @@ pub fn CaseDetail(
         });
         // Every section stays mounted and is hidden off its tab, so switching
         // tabs keeps filters and half-typed input and does not refetch.
-        let shown_on = move |tabs: &'static [CaseTab]| {
-            move || if tabs.contains(&tab.get()) { "space-y-6" } else { "hidden" }
+        let overview_properties =
+            Memo::new(move |_| live_case().map(|case| case.properties).unwrap_or_default());
+        let overview = move || {
+            view! {
+                <CaseOverview
+                    case_id=case_sv.get_value()
+                    properties=Signal::from(overview_properties)
+                    client_first_name=client_first_name.get_value()
+                    show_intake=state.is_volunteer_or_admin() && can_read_case_material
+                    show_case_info=can_read_case_material
+                    show_people=has_information_management_access
+                    can_edit_people=can_edit && has_information_management_access
+                    show_plan=state.is_volunteer_or_admin()
+                    can_edit_plan=can_edit
+                    can_note_plan=can_note
+                    on_open_intake=Callback::new(move |_| select_tab.run(CaseTab::Intake))
+                    on_open_notes=Callback::new(move |_| select_tab.run(CaseTab::CaseNotes))
+                />
+            }
         };
-        let tab_note_view = move || match tab.get() {
+        let shown_on = move |tabs: &'static [CaseTab]| {
+            move || {
+                if tabs.contains(&tab.get()) {
+                    "space-y-6"
+                } else {
+                    "hidden"
+                }
+            }
+        };
+        let tab_note_view = move || {
+            match tab.get() {
             CaseTab::Legal => tab_note(
                 "Legal work isn't tracked here yet. Court orders filed on this case are below.",
             )
@@ -2183,17 +2242,29 @@ pub fn CaseDetail(
             }
             .into_any(),
             _ => ().into_any(),
+        }
         };
         view! {
-            <CaseTabBar tabs=tabs active=tab on_select=select_tab />
+            <CaseTabBar
+                tabs=tabs
+                active=tab
+                on_select=select_tab
+                badges=Signal::derive(move || {
+                    if !(state.is_volunteer_or_admin() && can_read_case_material) {
+                        return Vec::new();
+                    }
+                    let properties = live_case().map(|case| case.properties).unwrap_or_default();
+                    vec![(CaseTab::Intake, intake_status(&properties).0)]
+                })
+            />
             <div
                 role="tabpanel"
                 id=CaseTab::panel_id()
                 aria-labelledby=move || tab.get().tab_id()
                 class="space-y-6"
             >
-                <div class=shown_on(&[CaseTab::Overview])>{intake_tasks} {people_panel}</div>
-                <div class=shown_on(&[CaseTab::Intake])>{case_information}</div>
+                <div class=shown_on(&[CaseTab::Overview])>{overview}</div>
+                <div class=shown_on(&[CaseTab::Intake])>{intake_tasks} {case_information}</div>
                 <div class=shown_on(&[CaseTab::CaseNotes])>
                     <CaseNotesPanel case_id=case_sv.get_value() can_add=can_note />
                 </div>
