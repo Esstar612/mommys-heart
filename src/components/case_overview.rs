@@ -154,7 +154,12 @@ pub fn CaseOverview(
                                             >
                                                 {initials(&member.name)}
                                             </span>
-                                            <p class="min-w-0 flex-1 truncate font-bold">{member.name}</p>
+                                            <A
+                                                href=format!("/profile/{}", member.user_id)
+                                                attr:class="min-w-0 flex-1 truncate font-bold hover:text-primary-300"
+                                            >
+                                                {member.name}
+                                            </A>
                                             {access.map(|(label, colors)| view! {
                                                 <span class=badge_pill(colors)>{label}</span>
                                             })}
@@ -290,6 +295,7 @@ pub fn CaseOverview(
                             .into_iter()
                             .map(|c| {
                                 let detail = person_detail(&c);
+                                let contact_href = format!("/contacts/{}", c.contact_id);
                                 view! {
                                     <li class="flex items-start gap-3">
                                         <span
@@ -299,7 +305,7 @@ pub fn CaseOverview(
                                             {initials(&c.contact_name)}
                                         </span>
                                         <div class="min-w-0 flex-1">
-                                            <p class="truncate font-bold">{c.contact_name}</p>
+                                            <A href=contact_href attr:class="block truncate font-bold hover:text-primary-300">{c.contact_name}</A>
                                             <p class="text-sm text-slate-500">{detail}</p>
                                         </div>
                                         {can_edit_people.then(|| view! {
