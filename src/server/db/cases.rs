@@ -192,6 +192,7 @@ pub async fn get_summaries_for_user(
     limit: i64,
     search: &str,
     user: &User,
+    all_cases: bool,
 ) -> Result<Page<CaseSummary>, sqlx::Error> {
     let limit = limit.clamp(1, 100);
     let offset = offset.max(0);
@@ -207,11 +208,15 @@ pub async fn get_summaries_for_user(
     // The capability slug is an internal constant (never user input), so
     // interpolating it into the SQL is safe.
     const SEARCH: &str = "($1::text IS NULL OR c.id ILIKE $1 OR c.name ILIKE $1)";
-    let scope = format!(
-        "EXISTS (SELECT 1 FROM case_assignments a \
-         WHERE a.case_id = c.id AND a.user_id = $VIEWER AND a.capability = '{}')",
-        CaseCapability::ViewCase.slug()
-    );
+    let scope = if all_cases && user.role.has_full_case_access() {
+        "TRUE".to_string()
+    } else {
+        format!(
+            "EXISTS (SELECT 1 FROM case_assignments a \
+             WHERE a.case_id = c.id AND a.user_id = $VIEWER AND a.capability = '{}')",
+            CaseCapability::ViewCase.slug()
+        )
+    };
     // Drops withdrawn cases out of both this list and the Inbox, which share this
     // query. The status slug is an internal constant, never user input.
     let withdrawn = format!(" AND c.status <> '{}'", CaseStatus::Withdrawn.slug());
