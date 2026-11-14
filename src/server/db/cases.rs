@@ -86,10 +86,17 @@ fn summary_select(message_count_scope: &str) -> String {
           JOIN case_channels ch ON ch.id = m.channel_id
           WHERE m.case_id = c.id
             AND (({message_count_scope}) OR ch.kind <> '{restricted}')) AS message_count,
-        (SELECT MAX(m.sent_at) FROM messages m
-          JOIN case_channels ch ON ch.id = m.channel_id
-          WHERE m.case_id = c.id
-            AND (({message_count_scope}) OR ch.kind <> '{restricted}')) AS last_activity
+        GREATEST(
+          (SELECT MAX(m.sent_at) FROM messages m
+            JOIN case_channels ch ON ch.id = m.channel_id
+            WHERE m.case_id = c.id
+              AND (({message_count_scope}) OR ch.kind <> '{restricted}')),
+          (SELECT MAX(a.at) FROM audit_log a
+            WHERE a.entity_type = 'case' AND a.entity_id = c.id
+              AND (({message_count_scope}) OR a.visibility = 'shared')),
+          (SELECT MAX(n.at) FROM case_note_audit_log n
+            WHERE n.case_id = c.id AND ({message_count_scope}))
+        ) AS last_activity
  FROM cases c
  LEFT JOIN users u ON u.id = c.owner_id",
         restricted = ChannelKind::VolunteerOnly.slug()
@@ -230,7 +237,7 @@ pub async fn get_summaries_for_user(
     let page_sql = format!(
         "{}
          WHERE {SEARCH} AND {}{withdrawn}
-         ORDER BY c.id LIMIT $2 OFFSET $3",
+         ORDER BY last_activity DESC NULLS LAST, c.id LIMIT $2 OFFSET $3",
         summary_select(&format!(
             "(SELECT v.role FROM users v WHERE v.id = $4) IN {}",
             AccountRole::STAFF_ROLES_SQL
