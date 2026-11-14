@@ -401,6 +401,16 @@ pub async fn create(
     Ok(id)
 }
 
+pub async fn create_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    input: &ContactInput,
+    actor: &str,
+) -> Result<String, sqlx::Error> {
+    let id = ids::next(&mut **tx, "ct").await?;
+    insert_in(tx, &id, input, None, actor).await?;
+    Ok(id)
+}
+
 /// Create a linked contact inside an existing transaction.
 ///
 /// Used by registration and backfills so the account, its linked contact,

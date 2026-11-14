@@ -227,6 +227,7 @@ pub async fn replace_section(
     section: &str,
     properties: Vec<CaseProperty>,
     actor: &str,
+    audit_event: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let cleaned = clean(properties)
         .into_iter()
@@ -295,15 +296,8 @@ pub async fn replace_section(
     }
     tx.commit().await?;
 
-    audit::record(
-        pool(),
-        audit::Entity::Case,
-        case_id,
-        actor,
-        section,
-        "",
-        "questionnaire completed",
-    )
-    .await?;
+    if let Some(event) = audit_event {
+        audit::record(pool(), audit::Entity::Case, case_id, actor, section, "", event).await?;
+    }
     Ok(())
 }
