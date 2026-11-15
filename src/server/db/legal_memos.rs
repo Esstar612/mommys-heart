@@ -23,6 +23,16 @@ struct Locked {
 pub const STALE_MEMO_ERROR: &str =
     "This memo was changed in another window. Reload to get the latest version.";
 
+pub struct ApprovedSnapshot {
+    pub case_id: String,
+    pub title: String,
+    pub content: LegalMemoContent,
+    pub author_name: String,
+    pub attorney_name: String,
+    pub approved_by_name: String,
+    pub approved_at: String,
+}
+
 fn parse_content(raw: &str) -> Result<LegalMemoContent, sqlx::Error> {
     serde_json::from_str(raw)
         .map_err(|_| sqlx::Error::Protocol("This memo couldn't be read.".to_string()))
@@ -523,6 +533,75 @@ pub async fn start_new_version(
     )
     .await?;
     tx.commit().await
+}
+
+pub async fn latest_approved_version(memo_id: &str) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT max(version) FROM legal_memo_versions WHERE memo_id = $1 AND event = 'approved'",
+    )
+    .bind(memo_id)
+    .fetch_one(pool())
+    .await
+}
+
+#[derive(sqlx::FromRow)]
+struct SnapshotRow {
+    case_id: String,
+    title: String,
+    content: String,
+    author_name: String,
+    attorney_name: String,
+    actor_name: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn approved_snapshot(
+    memo_id: &str,
+    version: i32,
+) -> Result<Option<ApprovedSnapshot>, sqlx::Error> {
+    let row = sqlx::query_as::<_, SnapshotRow>(
+        "SELECT m.case_id, v.title, v.content::text AS content, m.author_name, v.attorney_name,
+                v.actor_name, v.created_at
+         FROM legal_memo_versions v JOIN legal_memos m ON m.id = v.memo_id
+         WHERE v.memo_id = $1 AND v.version = $2 AND v.event = 'approved'",
+    )
+    .bind(memo_id)
+    .bind(version)
+    .fetch_optional(pool())
+    .await?;
+    let Some(r) = row else {
+        return Ok(None);
+    };
+    Ok(Some(ApprovedSnapshot {
+        case_id: r.case_id,
+        title: r.title,
+        content: parse_content(&r.content)?,
+        author_name: r.author_name,
+        attorney_name: r.attorney_name,
+        approved_by_name: r.actor_name,
+        approved_at: local_stamp(r.created_at),
+    }))
+}
+
+pub async fn needing_filing(
+    kind: &str,
+    after_seq: i64,
+    limit: i64,
+) -> Result<Vec<(i64, String, i32)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT v.seq, v.memo_id, v.version
+         FROM legal_memo_versions v
+         LEFT JOIN case_record_files f
+           ON f.kind = $1 AND f.record_id = v.memo_id AND f.version = v.version
+         WHERE v.event = 'approved' AND f.record_id IS NULL AND v.seq > $2
+         ORDER BY v.seq
+         LIMIT $3",
+    )
+    .bind(kind)
+    .bind(after_seq)
+    .bind(limit)
+    .fetch_all(pool())
+    .await
 }
 
 async fn lock(tx: &mut Tx<'_>, memo_id: &str) -> Result<Locked, sqlx::Error> {

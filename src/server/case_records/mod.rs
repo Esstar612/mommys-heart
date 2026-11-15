@@ -1,3 +1,5 @@
+pub mod legal_memo;
+
 use crate::server::docx::DOCX_MIME;
 use crate::server::sharepoint;
 
@@ -35,5 +37,5 @@ pub fn start_filing_backfill() {
 }
 
 async fn backfill() -> Result<(), String> {
-    Ok(())
+    legal_memo::backfill().await
 }
