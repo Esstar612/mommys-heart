@@ -518,7 +518,7 @@ pub async fn case_folder_choices() -> Result<Vec<String>, ServerFnError> {
         .map_err(ServerFnError::new)?;
     Ok(entries
         .into_iter()
-        .filter(|entry| entry.is_folder)
+        .filter(|entry| entry.is_folder && !crate::server::sharepoint::sync::is_volunteer_root(&entry.name))
         .map(|entry| entry.name)
         .collect())
 }
@@ -529,19 +529,24 @@ pub async fn link_case_documents_folder(
     folder_name: String,
 ) -> Result<(), ServerFnError> {
     use crate::server::db::case_documents;
-    use crate::server::permissions::{require_operations_admin, require_user};
+    use crate::server::permissions::{require_cap, require_operations_admin, require_user};
     use crate::server::sharepoint::sync;
+    use crate::server_fns::capabilities::CaseCapability;
 
     let user = require_user().await?;
     require_operations_admin(&user)?;
+    require_cap(&user, &case_id, CaseCapability::UploadEvidence).await?;
 
     let before = case_documents::folder_ref(&case_id)
         .await
         .map_err(|e| ServerFnError::new(format!("database error: {e}")))?;
-    let after = sync::link_case_folder(&case_id, &folder_name)
+    let after_url = sync::link_case_folder(&case_id, &folder_name)
         .await
         .map_err(|e| ServerFnError::new(format!("Could not link the folder: {e}")))?;
-    audit_document(&case_id, &user, "documents folder", &before.web_url, &after.web_url).await;
+    audit_document(&case_id, &user, "documents folder", &before.web_url, &after_url).await;
+    sync::finish_linked_case_folder(&case_id)
+        .await
+        .map_err(|e| ServerFnError::new(format!("The folder is linked, but setting it up failed: {e}")))?;
     Ok(())
 }
 

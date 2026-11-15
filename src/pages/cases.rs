@@ -1255,38 +1255,52 @@ pub fn CaseDetail(
     let link_choices = RwSignal::new(Vec::<String>::new());
     let link_name = RwSignal::new(String::new());
     let link_busy = RwSignal::new(false);
+    let link_choices_loading = RwSignal::new(false);
+    let link_error = RwSignal::new(String::new());
 
     let open_link = move |_| {
         link_open.set(true);
-        docs_error.set(String::new());
+        link_error.set(String::new());
+        link_choices_loading.set(true);
         spawn_local(async move {
             match documents::case_folder_choices().await {
-                Ok(names) => link_choices.set(names),
-                Err(e) => docs_error.set(err_text(e)),
+                Ok(names) => {
+                    let _ = link_choices.try_set(names);
+                }
+                Err(e) => {
+                    let _ = link_error.try_set(err_text(e));
+                }
             }
+            let _ = link_choices_loading.try_set(false);
         });
     };
 
     let link_folder = move |_| {
+        if link_busy.get_untracked() {
+            return;
+        }
         let name = link_name.get_untracked().trim().to_string();
         if name.is_empty() {
-            docs_error.set("Choose a folder to link.".to_string());
+            link_error.set("Choose a folder to link.".to_string());
             return;
         }
         let case_id = case_sv.get_value();
         link_busy.set(true);
-        docs_error.set(String::new());
+        link_error.set(String::new());
         spawn_local(async move {
             match documents::link_case_documents_folder(case_id, name).await {
                 Ok(()) => {
-                    link_open.set(false);
-                    link_name.set(String::new());
-                    open_folder.set(String::new());
+                    let _ = link_open.try_set(false);
+                    let _ = link_name.try_set(String::new());
+                    let _ = open_folder.try_set(String::new());
                     refresh_documents();
                 }
-                Err(e) => docs_error.set(err_text(e)),
+                Err(e) => {
+                    let _ = link_error.try_set(err_text(e));
+                    refresh_documents();
+                }
             }
-            link_busy.set(false);
+            let _ = link_busy.try_set(false);
         });
     };
 
@@ -1649,7 +1663,7 @@ pub fn CaseDetail(
         };
 
         let link_controls = move || {
-            if !has_operations_admin_permissions {
+            if !(has_operations_admin_permissions && can_upload_evidence) {
                 return ().into_any();
             }
             if !link_open.get() {
@@ -1692,7 +1706,23 @@ pub fn CaseDetail(
                         >
                             {move || if link_busy.get() { "Linking\u{2026}" } else { "Link folder" }}
                         </button>
+                        <button
+                            on:click=move |_| {
+                                link_open.set(false);
+                                link_error.set(String::new());
+                            }
+                            prop:disabled=move || link_busy.get()
+                            class="shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-slate-400 hover:text-slate-200 disabled:opacity-60"
+                        >
+                            "Cancel"
+                        </button>
                     </div>
+                    <Show when=move || link_choices_loading.get()>
+                        <p class="text-xs text-slate-500">"Loading folders\u{2026}"</p>
+                    </Show>
+                    <Show when=move || !link_error.get().is_empty()>
+                        <p class="text-xs text-rose-300" role="alert">{move || link_error.get()}</p>
+                    </Show>
                 </div>
             }
             .into_any()
