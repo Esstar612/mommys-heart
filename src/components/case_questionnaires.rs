@@ -234,20 +234,26 @@ pub fn CaseIntakeTaskSummary(case_id: String, properties: Vec<CaseProperty>) -> 
 }
 
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(1500);
+const RETRY_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy)]
 struct DraftSaver {
     case_id: StoredValue<String>,
     slug: &'static str,
     answers: RwSignal<BTreeMap<String, String>>,
+    submitting: RwSignal<bool>,
     generation: RwSignal<u32>,
     saving: RwSignal<bool>,
+    dirty: RwSignal<bool>,
     status: RwSignal<String>,
 }
 
 impl DraftSaver {
-    fn save(self, generation: u32) {
-        if self.generation.try_get_untracked() != Some(generation) || self.saving.get_untracked() {
+    fn save(self, generation: u32, is_retry: bool) {
+        if self.generation.try_get_untracked() != Some(generation)
+            || self.saving.get_untracked()
+            || self.submitting.get_untracked()
+        {
             return;
         }
         let Some(current) = self.answers.try_get_untracked() else {
@@ -263,15 +269,43 @@ impl DraftSaver {
             )
             .await;
             let _ = self.saving.try_set(false);
-            let _ = self.status.try_set(match result {
-                Ok(()) => "Saved".to_string(),
-                Err(e) => format!("Not saved: {}", err_text(e)),
-            });
-            if let Some(latest) = self.generation.try_get_untracked() {
-                if latest != generation {
-                    self.save(latest);
+            let latest = self.generation.try_get_untracked();
+            match result {
+                Ok(()) => {
+                    if latest == Some(generation) {
+                        let _ = self.dirty.try_set(false);
+                    }
+                    let _ = self.status.try_set("Saved".to_string());
+                }
+                Err(e) => {
+                    let _ = self.status.try_set(format!("Not saved: {}", err_text(e)));
+                    if !is_retry && latest == Some(generation) {
+                        set_timeout(move || self.save(generation, true), RETRY_DELAY);
+                    }
                 }
             }
+            if let Some(latest) = latest {
+                if latest != generation {
+                    self.save(latest, false);
+                }
+            }
+        });
+    }
+
+    fn flush_on_leave(self) {
+        if self.dirty.try_get_untracked() != Some(true)
+            || self.submitting.try_get_untracked() != Some(false)
+        {
+            return;
+        }
+        let (Some(answers), Some(case_id)) =
+            (self.answers.try_get_untracked(), self.case_id.try_get_value())
+        else {
+            return;
+        };
+        let slug = self.slug.to_string();
+        spawn_local(async move {
+            let _ = case_properties::save_questionnaire_draft(case_id, slug, answers).await;
         });
     }
 }
@@ -296,18 +330,27 @@ fn questionnaire_card(
         case_id: case_sv,
         slug: questionnaire.slug,
         answers,
+        submitting: pending,
         generation: RwSignal::new(0),
         saving: RwSignal::new(false),
+        dirty: RwSignal::new(false),
         status: RwSignal::new(String::new()),
     };
     let ignore_next_change = RwSignal::new(false);
-    let prefilled = RwSignal::new(false);
+    let prefill_note = RwSignal::new(String::new());
+    let nothing_saved_yet = answers.with_untracked(|values| values.is_empty());
 
-    if autosaves && questionnaire.slug == GENERAL_QUESTIONNAIRE.slug {
+    if autosaves && nothing_saved_yet && questionnaire.slug == GENERAL_QUESTIONNAIRE.slug {
         spawn_local(async move {
-            let Ok(signup) = case_properties::general_intake_prefill(case_sv.get_value()).await
-            else {
-                return;
+            let signup = match case_properties::general_intake_prefill(case_sv.get_value()).await {
+                Ok(signup) => signup,
+                Err(e) => {
+                    let _ = prefill_note.try_set(format!(
+                        "Could not load the client's signup details: {}",
+                        err_text(e)
+                    ));
+                    return;
+                }
             };
             let Some(mut values) = answers.try_get_untracked() else {
                 return;
@@ -322,9 +365,25 @@ fn questionnaire_card(
             }
             if filled_any {
                 ignore_next_change.set(true);
-                prefilled.set(true);
+                prefill_note.set(
+                    "Some answers were filled in from the client's signup. Check them before submitting."
+                        .to_string(),
+                );
                 answers.set(values);
             }
+        });
+    }
+
+    if autosaves {
+        let unload = window_event_listener(leptos::ev::beforeunload, move |event| {
+            if draft.dirty.try_get_untracked() == Some(true) {
+                event.prevent_default();
+                event.set_return_value("");
+            }
+        });
+        on_cleanup(move || {
+            unload.remove();
+            draft.flush_on_leave();
         });
     }
 
@@ -337,9 +396,10 @@ fn questionnaire_card(
             ignore_next_change.set(false);
             return;
         }
+        draft.dirty.set(true);
         draft.generation.update(|value| *value += 1);
         let generation = draft.generation.get_untracked();
-        set_timeout(move || draft.save(generation), AUTOSAVE_DELAY);
+        set_timeout(move || draft.save(generation, false), AUTOSAVE_DELAY);
     });
 
     let save = move || {
@@ -364,6 +424,7 @@ fn questionnaire_card(
             .await
             {
                 Ok(()) => {
+                    let _ = draft.dirty.try_set(false);
                     let _ = pending.try_set(false);
                     let _ = expanded.try_set(false);
                     on_saved.run(());
@@ -477,8 +538,8 @@ fn questionnaire_card(
                     save();
                 }
             >
-                <Show when=move || prefilled.get()>
-                    <p class="text-xs text-slate-500">"Some answers were filled in from the client's signup. Check them before submitting."</p>
+                <Show when=move || !prefill_note.get().is_empty()>
+                    <p class="text-xs text-slate-500">{move || prefill_note.get()}</p>
                 </Show>
                 {questions}
                 {trigger_preview}

@@ -125,7 +125,9 @@ pub async fn save_case_questionnaire(
         questionnaire.section,
         answer_properties(questionnaire, &answers),
         &user.full_name(),
-        Some("questionnaire completed"),
+        case_properties::SectionWrite::Submit {
+            audit_event: "questionnaire completed",
+        },
     )
     .await
     .map_err(ServerFnError::new)?;
@@ -153,6 +155,9 @@ pub async fn save_questionnaire_draft(
     use crate::server::permissions::{require_cap, require_user, require_visibility};
     use crate::server_fns::capabilities::CaseCapability;
 
+    const ALREADY_SUBMITTED: &str =
+        "This questionnaire is already submitted. Use Edit answers to change it.";
+
     let user = require_user().await?;
     require_cap(&user, &case_id, CaseCapability::AddNotes).await?;
     require_visibility(&user, Visibility::VolunteerOnly)?;
@@ -163,9 +168,7 @@ pub async fn save_questionnaire_draft(
         .await
         .map_err(ServerFnError::new)?;
     if is_complete(&properties, questionnaire) {
-        return Err(ServerFnError::new(
-            "This questionnaire is already submitted. Use Edit answers to change it.",
-        ));
+        return Err(ServerFnError::new(ALREADY_SUBMITTED));
     }
     if questionnaire.slug != GENERAL_QUESTIONNAIRE.slug
         && !required_followups(&properties)
@@ -177,16 +180,21 @@ pub async fn save_questionnaire_draft(
         ));
     }
 
-    case_properties::replace_section(
+    let saved = case_properties::replace_section(
         &case_id,
         Visibility::VolunteerOnly,
         questionnaire.section,
         draft_properties(questionnaire, &answers),
         &user.full_name(),
-        None,
+        case_properties::SectionWrite::Draft,
     )
     .await
-    .map_err(ServerFnError::new)
+    .map_err(ServerFnError::new)?;
+    if saved {
+        Ok(())
+    } else {
+        Err(ServerFnError::new(ALREADY_SUBMITTED))
+    }
 }
 
 #[server(prefix = "/api")]

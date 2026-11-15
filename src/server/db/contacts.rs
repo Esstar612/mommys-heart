@@ -69,6 +69,7 @@ impl From<ContactRow> for Contact {
             linked_email: row.linked_email.unwrap_or_default(),
             linked_role: row.linked_role.as_deref().and_then(AccountRole::from_slug),
             has_account_field_conflict: row.has_account_field_conflict,
+            openable_profile_id: String::new(),
         }
     }
 }
@@ -241,6 +242,14 @@ pub async fn get(
     .fetch_optional(pool())
     .await?;
     Ok(row.map(Into::into))
+}
+
+pub async fn account_of(id: &str) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, Option<String>>("SELECT user_id FROM contacts WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool())
+        .await
+        .map(Option::flatten)
 }
 
 /// The contact linked to an account, if there is one. Used by the person page to

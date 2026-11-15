@@ -95,8 +95,8 @@ pub fn ContactDetail(contact_id: String) -> impl IntoView {
                 let types = person.types.clone();
                 let editable = person.clone();
                 let linked = person.clone();
-                let profile_href = (!person.user_id.is_empty())
-                    .then(|| format!("/profile/{}", person.user_id));
+                let profile_href = (!person.openable_profile_id.is_empty())
+                    .then(|| format!("/profile/{}", person.openable_profile_id));
                 view! {
                     <div class=PANEL>
                         <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
