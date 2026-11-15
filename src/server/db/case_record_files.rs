@@ -20,18 +20,12 @@ pub async fn latest(kind: &str, record_id: &str) -> Result<Option<FiledRecord>, 
     .bind(record_id)
     .fetch_optional(pool())
     .await?;
-    Ok(row.map(|(version, relative_path, file_name, web_url, filed_at)| {
-        use chrono::TimeZone;
-        FiledRecord {
-            version,
-            relative_path,
-            file_name,
-            web_url,
-            filed_at: chrono::Local
-                .from_utc_datetime(&filed_at.naive_utc())
-                .format("%Y-%m-%d %H:%M")
-                .to_string(),
-        }
+    Ok(row.map(|(version, relative_path, file_name, web_url, filed_at)| FiledRecord {
+        version,
+        relative_path,
+        file_name,
+        web_url,
+        filed_at: crate::server::db::local_stamp(filed_at),
     }))
 }
 
