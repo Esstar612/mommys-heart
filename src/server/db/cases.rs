@@ -7,6 +7,7 @@ use crate::server::db::{
 use crate::server_fns::capabilities::CaseCapability;
 use crate::server_fns::case_properties::CaseProperty;
 use crate::server_fns::cases::{Case, CaseStatus, CaseSummary, CaseWithdrawal};
+use crate::server_fns::case_notes::CaseNoteAuditAction;
 use crate::server_fns::channels::ChannelKind;
 use crate::server_fns::pagination::Page;
 use crate::server_fns::users::{AccountRole, User};
@@ -77,6 +78,8 @@ fn inactivity_threshold() -> String {
 /// client); a viewer-scoped query passes a role test so a client's case list
 /// does not even leak *how many* private staff messages exist. It is always an
 /// internal constant or a bind-parameter reference, never user input.
+const CLIENT_VISIBLE_CASE_EVENTS: &str = "('case', 'status', 'name', 'owner')";
+
 fn summary_select(message_count_scope: &str) -> String {
     format!(
         "SELECT c.id, c.name, c.status, c.review_reason, c.owner_id,
@@ -93,13 +96,16 @@ fn summary_select(message_count_scope: &str) -> String {
               AND (({message_count_scope}) OR ch.kind <> '{restricted}')),
           (SELECT MAX(a.at) FROM audit_log a
             WHERE a.entity_type = 'case' AND a.entity_id = c.id
-              AND (({message_count_scope}) OR a.visibility = 'shared')),
+              AND (({message_count_scope}) OR a.field IN {CLIENT_VISIBLE_CASE_EVENTS})),
           (SELECT MAX(n.at) FROM case_note_audit_log n
-            WHERE n.case_id = c.id AND ({message_count_scope}))
+            WHERE n.case_id = c.id AND ({message_count_scope})
+              AND n.action IN ('{finalize}', '{addendum}'))
         ) AS last_activity
  FROM cases c
  LEFT JOIN users u ON u.id = c.owner_id",
-        restricted = ChannelKind::VolunteerOnly.slug()
+        restricted = ChannelKind::VolunteerOnly.slug(),
+        finalize = CaseNoteAuditAction::FinalizeNote.slug(),
+        addendum = CaseNoteAuditAction::AddAddendum.slug(),
     )
 }
 
@@ -201,7 +207,7 @@ pub async fn get_summaries_for_user(
     user: &User,
     all_cases: bool,
 ) -> Result<Page<CaseSummary>, sqlx::Error> {
-    let limit = limit.clamp(1, 100);
+    let limit = limit.clamp(1, 1_000);
     let offset = offset.max(0);
 
     // Escaped `%term%` pattern (or `None` for "no filter"), so user input is

@@ -240,6 +240,7 @@ pub fn CaseHomePage() -> impl IntoView {
     // Shown after a withdrawal, since the case itself disappears from the list
     // and would otherwise vanish with no acknowledgement.
     let notice = RwSignal::new(String::new());
+    let request_generation = RwSignal::new(0u64);
 
     Effect::new(move |_| {
         let count = window.get();
@@ -249,17 +250,25 @@ pub fn CaseHomePage() -> impl IntoView {
         if !state.is_authenticated() {
             return;
         }
+        request_generation.update(|generation| *generation += 1);
+        let generation = request_generation.get_untracked();
         loading.set(true);
         spawn_local(async move {
-            match cases::load_case_summaries_for_user(0, count, q, all).await {
-                Ok(page) => {
-                    cases.set(page.items);
-                    total.set(page.total);
-                    load_error.set(None);
-                }
-                Err(e) => load_error.set(Some(err_text(e))),
+            let result = cases::load_case_summaries_for_user(0, count, q, all).await;
+            if request_generation.try_get_untracked() != Some(generation) {
+                return;
             }
-            loading.set(false);
+            match result {
+                Ok(page) => {
+                    let _ = cases.try_set(page.items);
+                    let _ = total.try_set(page.total);
+                    let _ = load_error.try_set(None);
+                }
+                Err(e) => {
+                    let _ = load_error.try_set(Some(err_text(e)));
+                }
+            }
+            let _ = loading.try_set(false);
         });
     });
 
@@ -431,6 +440,10 @@ pub fn CaseHomePage() -> impl IntoView {
                                     type="button"
                                     aria-pressed=move || (all_cases.get() == value).to_string()
                                     on:click=move |_| {
+                                        if all_cases.get_untracked() == value {
+                                            return;
+                                        }
+                                        selected.set(None);
                                         window.set(PAGE_SIZE);
                                         all_cases.set(value);
                                     }
