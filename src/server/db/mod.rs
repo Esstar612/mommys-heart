@@ -32,6 +32,7 @@ pub mod email_failures;
 pub mod funding;
 pub mod grants;
 pub mod ids;
+pub mod legal_memos;
 pub mod messages;
 pub mod mfa;
 pub mod organization_properties;

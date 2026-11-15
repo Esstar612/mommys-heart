@@ -240,3 +240,152 @@ pub struct MemoProblem {
 pub const MEMO_FOLDER: [&str; 2] = ["Intake", "Legal Memo"];
 pub const DOCKET_KEYS: [&str; 2] = ["Index or docket number", "Docket number 1"];
 pub const COURT_KEYS: [&str; 3] = ["Court location", "Court", "Court 1"];
+
+pub const MAX_SHORT: usize = 200;
+pub const MAX_LONG: usize = 10_000;
+pub const MAX_ROWS: usize = 50;
+
+pub fn validate_draft(title: &str, content: &LegalMemoContent) -> Result<(), String> {
+    if title.trim().is_empty() {
+        return Err("Give the memo a title.".to_string());
+    }
+    let short = |value: &str, label: &str| check_len(value, label, MAX_SHORT);
+    let long = |value: &str, label: &str| check_len(value, label, MAX_LONG);
+    short(title, "title")?;
+    short(&content.memo_date, "date")?;
+    short(&content.safety_answered_on, "safety answer date")?;
+    short(&content.safety_escalated_on, "escalation date")?;
+    short(&content.safety_escalated_to, "escalated to")?;
+    long(&content.brief_answer, "brief answer")?;
+    rows(content.questions.len(), "questions")?;
+    rows(content.facts.len(), "facts")?;
+    rows(content.procedure.len(), "procedural history")?;
+    rows(content.evidence.len(), "evidence log")?;
+    rows(content.authorities.len(), "authorities")?;
+    rows(content.outstanding.len(), "outstanding questions")?;
+    rows(content.next_steps.len(), "next steps")?;
+    for q in &content.questions {
+        long(q, "question")?;
+    }
+    for f in &content.facts {
+        long(&f.text, "fact")?;
+    }
+    for p in &content.procedure {
+        short(&p.date, "event date")?;
+        long(&p.event, "event")?;
+        short(&p.source, "event source")?;
+    }
+    for e in &content.evidence {
+        long(&e.item, "evidence item")?;
+        short(&e.source, "evidence source")?;
+        short(&e.date_received, "date received")?;
+        long(&e.follow_up, "follow-up")?;
+    }
+    for a in &content.authorities {
+        long(&a.citation, "citation")?;
+        short(&a.court_level, "court level")?;
+        long(&a.link, "link")?;
+        short(&a.date_checked, "date checked")?;
+    }
+    for a in &content.analysis {
+        long(a, "analysis")?;
+    }
+    for q in &content.outstanding {
+        long(q, "outstanding question")?;
+    }
+    for n in &content.next_steps {
+        long(&n.action, "next step")?;
+        short(&n.owner, "proposed owner")?;
+        short(&n.timing, "timing")?;
+    }
+    Ok(())
+}
+
+pub fn problems_before_review(attorney_id: &str, content: &LegalMemoContent) -> Vec<MemoProblem> {
+    let mut out = Vec::new();
+    let mut push = |section: &str, message: String| {
+        out.push(MemoProblem {
+            section: section.to_string(),
+            message,
+        })
+    };
+    if attorney_id.trim().is_empty() {
+        push("Header", "Choose the attorney this memo goes to.".into());
+    }
+    match content.safety_flagged {
+        None => push("Safety", "Answer whether a safety concern was flagged.".into()),
+        Some(true) => {
+            if content.safety_escalated_on.trim().is_empty() || content.safety_escalated_to.trim().is_empty() {
+                push(
+                    "Safety",
+                    "Add the date the safety concern was escalated and who it was escalated to.".into(),
+                );
+            }
+        }
+        Some(false) => {}
+    }
+    if !content.questions.iter().any(|q| !q.trim().is_empty()) {
+        push("1 Questions presented", "Add at least one question presented.".into());
+    }
+    if content.brief_answer.trim().is_empty() {
+        push("2 Brief answer", "2 Brief answer is empty. It's required.".into());
+    }
+    let facts: Vec<&MemoFact> = content.facts.iter().filter(|f| !f.text.trim().is_empty()).collect();
+    if facts.is_empty() {
+        push("3 Relevant facts", "Add at least one relevant fact.".into());
+    }
+    for fact in facts.iter().filter(|f| f.source.is_none()) {
+        push(
+            "3 Relevant facts",
+            format!("3 Relevant facts: \"{}\" needs a source.", excerpt(&fact.text)),
+        );
+    }
+    for event in &content.procedure {
+        if event.status == EventStatus::Confirmed && event.source.trim().is_empty() {
+            push(
+                "4 Procedural history",
+                format!(
+                    "4 Procedural history: \"{}\" is marked Confirmed without a source document.",
+                    excerpt(&event.event)
+                ),
+            );
+        }
+    }
+    for item in &content.evidence {
+        if item.status == EvidenceStatus::Reviewed && item.date_received.trim().is_empty() {
+            push(
+                "5 Evidence log",
+                format!(
+                    "5 Evidence log: \"{}\" is marked Reviewed but hasn't been received.",
+                    excerpt(&item.item)
+                ),
+            );
+        }
+    }
+    out
+}
+
+fn excerpt(text: &str) -> String {
+    let text = text.trim();
+    if text.chars().count() > 60 {
+        format!("{}\u{2026}", text.chars().take(60).collect::<String>())
+    } else {
+        text.to_string()
+    }
+}
+
+fn check_len(value: &str, label: &str, max: usize) -> Result<(), String> {
+    if value.chars().count() > max {
+        Err(format!("The {label} must be {max} characters or fewer."))
+    } else {
+        Ok(())
+    }
+}
+
+fn rows(count: usize, label: &str) -> Result<(), String> {
+    if count > MAX_ROWS {
+        Err(format!("The {label} can have at most {MAX_ROWS} rows."))
+    } else {
+        Ok(())
+    }
+}
