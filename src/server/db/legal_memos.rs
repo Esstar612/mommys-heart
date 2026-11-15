@@ -1,9 +1,23 @@
-use crate::server::db::pool;
+use crate::helpers::visibility::Visibility;
+use crate::server::db::{audit, ids, pool};
 use crate::server_fns::legal_memos::{
-    LegalMemo, LegalMemoContent, LegalMemoSummary, MemoAttorney, MemoStatus, MemoVersionEntry,
-    MemoVersionSnapshot, VersionEvent, DOCKET_KEYS,
+    LegalMemo, LegalMemoContent, LegalMemoSummary, MemoAttorney, MemoReview, MemoStatus,
+    MemoVersionEntry, MemoVersionSnapshot, ReviewCheck, ReviewMark, VersionEvent, DOCKET_KEYS,
 };
 use crate::server_fns::users::AccountRole;
+
+type Tx<'a> = sqlx::Transaction<'a, sqlx::Postgres>;
+
+struct Locked {
+    status: MemoStatus,
+    version: i32,
+    title: String,
+    content: String,
+    review: MemoReview,
+    author_id: String,
+    attorney_id: String,
+    attorney_name: String,
+}
 
 fn local_stamp(at: chrono::DateTime<chrono::Utc>) -> String {
     use chrono::TimeZone;
@@ -16,6 +30,10 @@ fn local_stamp(at: chrono::DateTime<chrono::Utc>) -> String {
 fn parse_content(raw: &str) -> Result<LegalMemoContent, sqlx::Error> {
     serde_json::from_str(raw)
         .map_err(|_| sqlx::Error::Protocol("This memo couldn't be read.".to_string()))
+}
+
+fn to_json<T: serde::Serialize>(value: &T) -> Result<String, sqlx::Error> {
+    serde_json::to_string(value).map_err(|e| sqlx::Error::Protocol(e.to_string()))
 }
 
 pub async fn case_of(memo_id: &str) -> Result<Option<String>, sqlx::Error> {
@@ -227,4 +245,426 @@ pub async fn attorney_choices(case_id: &str) -> Result<Vec<MemoAttorney>, sqlx::
             .map(|(id, name)| MemoAttorney { id, name })
             .collect()
     })
+}
+
+pub async fn create(
+    case_id: &str,
+    title: &str,
+    author_id: &str,
+    author_name: &str,
+) -> Result<String, sqlx::Error> {
+    let mut tx = pool().begin().await?;
+    audit::set_actor_in_transaction(&mut tx, author_id).await?;
+    let id = ids::next(&mut *tx, "lm").await?;
+    sqlx::query(
+        "INSERT INTO legal_memos (id, case_id, title, author_id, author_name)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&id)
+    .bind(case_id)
+    .bind(title)
+    .bind(author_id)
+    .bind(author_name)
+    .execute(&mut *tx)
+    .await?;
+    record(&mut tx, case_id, &id, author_name, "", "created").await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+pub async fn save_draft(
+    memo_id: &str,
+    author_id: &str,
+    title: &str,
+    attorney: Option<&MemoAttorney>,
+    content: &LegalMemoContent,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool().begin().await?;
+    audit::set_actor_in_transaction(&mut tx, author_id).await?;
+    let locked = lock(&mut tx, memo_id).await?;
+    require_editable(&locked)?;
+    write_draft(&mut tx, memo_id, title, attorney, content).await?;
+    tx.commit().await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn send_for_review(
+    memo_id: &str,
+    case_id: &str,
+    actor_id: &str,
+    actor: &str,
+    title: &str,
+    attorney: &MemoAttorney,
+    content: &LegalMemoContent,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool().begin().await?;
+    audit::set_actor_in_transaction(&mut tx, actor_id).await?;
+    let locked = lock(&mut tx, memo_id).await?;
+    require_editable(&locked)?;
+    write_draft(&mut tx, memo_id, title, Some(attorney), content).await?;
+    sqlx::query(
+        "UPDATE legal_memos SET status = 'in_review', review = '{}'::jsonb, updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(memo_id)
+    .execute(&mut *tx)
+    .await?;
+    let snapshot = to_json(content)?;
+    add_version(
+        &mut tx,
+        memo_id,
+        locked.version,
+        VersionEvent::Sent,
+        title,
+        &snapshot,
+        &attorney.name,
+        actor_id,
+        actor,
+        "",
+    )
+    .await?;
+    record(
+        &mut tx,
+        case_id,
+        memo_id,
+        actor,
+        locked.status.label(),
+        &format!("sent to {} for review (version {})", attorney.name, locked.version),
+    )
+    .await?;
+    tx.commit().await
+}
+
+pub async fn request_revisions(
+    memo_id: &str,
+    case_id: &str,
+    actor_id: &str,
+    actor: &str,
+    comment: &str,
+    is_site_admin: bool,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool().begin().await?;
+    audit::set_actor_in_transaction(&mut tx, actor_id).await?;
+    let locked = lock(&mut tx, memo_id).await?;
+    require_in_review(&locked)?;
+    require_reviewer(&locked, actor_id, is_site_admin)?;
+    add_version(
+        &mut tx,
+        memo_id,
+        locked.version,
+        VersionEvent::RevisionsRequested,
+        &locked.title,
+        &locked.content,
+        &locked.attorney_name,
+        actor_id,
+        actor,
+        comment,
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE legal_memos
+         SET status = 'revisions_requested', version = version + 1, updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(memo_id)
+    .execute(&mut *tx)
+    .await?;
+    record(
+        &mut tx,
+        case_id,
+        memo_id,
+        actor,
+        locked.status.label(),
+        &format!("revisions requested on version {}", locked.version),
+    )
+    .await?;
+    tx.commit().await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn set_review_check(
+    memo_id: &str,
+    case_id: &str,
+    check: ReviewCheck,
+    checked: bool,
+    actor_id: &str,
+    actor: &str,
+    is_site_admin: bool,
+) -> Result<MemoReview, sqlx::Error> {
+    let mut tx = pool().begin().await?;
+    audit::set_actor_in_transaction(&mut tx, actor_id).await?;
+    let mut locked = lock(&mut tx, memo_id).await?;
+    require_in_review(&locked)?;
+    require_reviewer(&locked, actor_id, is_site_admin)?;
+    locked.review.marks.retain(|m| m.check != check);
+    if checked {
+        locked.review.marks.push(ReviewMark {
+            check,
+            by_name: actor.to_string(),
+            at: crate::server::db::now_stamp(),
+        });
+    }
+    sqlx::query("UPDATE legal_memos SET review = $2::jsonb, updated_at = now() WHERE id = $1")
+        .bind(memo_id)
+        .bind(to_json(&locked.review)?)
+        .execute(&mut *tx)
+        .await?;
+    record(
+        &mut tx,
+        case_id,
+        memo_id,
+        actor,
+        "",
+        &format!(
+            "{} \"{}\" on version {}",
+            if checked { "checked" } else { "unchecked" },
+            check.label(),
+            locked.version
+        ),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(locked.review)
+}
+
+pub async fn approve(
+    memo_id: &str,
+    case_id: &str,
+    actor_id: &str,
+    actor: &str,
+    is_site_admin: bool,
+) -> Result<i32, sqlx::Error> {
+    let mut tx = pool().begin().await?;
+    audit::set_actor_in_transaction(&mut tx, actor_id).await?;
+    let locked = lock(&mut tx, memo_id).await?;
+    require_in_review(&locked)?;
+    require_reviewer(&locked, actor_id, is_site_admin)?;
+    let missing: Vec<&str> = ReviewCheck::REQUIRED_FOR_APPROVAL
+        .iter()
+        .filter(|check| !locked.review.has(**check))
+        .map(|check| check.label())
+        .collect();
+    if !missing.is_empty() {
+        return Err(sqlx::Error::Protocol(format!(
+            "Check these before approving: {}.",
+            missing.join(", ")
+        )));
+    }
+    add_version(
+        &mut tx,
+        memo_id,
+        locked.version,
+        VersionEvent::Approved,
+        &locked.title,
+        &locked.content,
+        &locked.attorney_name,
+        actor_id,
+        actor,
+        "",
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE legal_memos
+         SET status = 'approved', approved_by_name = $2, approved_at = now(), updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(memo_id)
+    .bind(actor)
+    .execute(&mut *tx)
+    .await?;
+    record(
+        &mut tx,
+        case_id,
+        memo_id,
+        actor,
+        locked.status.label(),
+        &format!("approved version {}", locked.version),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(locked.version)
+}
+
+pub async fn start_new_version(
+    memo_id: &str,
+    case_id: &str,
+    actor_id: &str,
+    actor: &str,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool().begin().await?;
+    audit::set_actor_in_transaction(&mut tx, actor_id).await?;
+    let locked = lock(&mut tx, memo_id).await?;
+    if locked.status != MemoStatus::Approved {
+        return Err(sqlx::Error::Protocol(
+            "Only an approved memo starts a new version.".into(),
+        ));
+    }
+    sqlx::query(
+        "UPDATE legal_memos
+         SET status = 'draft', version = version + 1, review = '{}'::jsonb,
+             approved_by_name = '', approved_at = NULL, updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(memo_id)
+    .execute(&mut *tx)
+    .await?;
+    record(
+        &mut tx,
+        case_id,
+        memo_id,
+        actor,
+        locked.status.label(),
+        &format!("started version {}", locked.version + 1),
+    )
+    .await?;
+    tx.commit().await
+}
+
+async fn lock(tx: &mut Tx<'_>, memo_id: &str) -> Result<Locked, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        status: String,
+        version: i32,
+        title: String,
+        content: String,
+        review: String,
+        author_id: Option<String>,
+        attorney_user_id: Option<String>,
+        attorney_name: String,
+    }
+    let row = sqlx::query_as::<_, Row>(
+        "SELECT status, version, title, content::text AS content, review::text AS review,
+                author_id, attorney_user_id, attorney_name
+         FROM legal_memos WHERE id = $1 FOR UPDATE",
+    )
+    .bind(memo_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| sqlx::Error::Protocol("Legal memo not found.".into()))?;
+    Ok(Locked {
+        status: MemoStatus::from_slug(&row.status).unwrap_or(MemoStatus::Draft),
+        version: row.version,
+        title: row.title,
+        content: row.content,
+        review: serde_json::from_str(&row.review).unwrap_or_default(),
+        author_id: row.author_id.unwrap_or_default(),
+        attorney_id: row.attorney_user_id.unwrap_or_default(),
+        attorney_name: row.attorney_name,
+    })
+}
+
+fn require_editable(locked: &Locked) -> Result<(), sqlx::Error> {
+    match locked.status {
+        MemoStatus::Draft | MemoStatus::RevisionsRequested => Ok(()),
+        MemoStatus::InReview => Err(sqlx::Error::Protocol(
+            "This memo is with the attorney for review and can't be edited right now.".into(),
+        )),
+        MemoStatus::Approved => Err(sqlx::Error::Protocol(
+            "This memo is approved. Start a new version to change it.".into(),
+        )),
+    }
+}
+
+fn require_reviewer(locked: &Locked, actor_id: &str, is_site_admin: bool) -> Result<(), sqlx::Error> {
+    if locked.author_id == actor_id {
+        return Err(sqlx::Error::Protocol(
+            "You wrote this memo, so someone else has to review it.".into(),
+        ));
+    }
+    if is_site_admin || (!locked.attorney_id.is_empty() && locked.attorney_id == actor_id) {
+        Ok(())
+    } else {
+        Err(sqlx::Error::Protocol(
+            "Only the attorney this memo is addressed to, or a site admin, can review it.".into(),
+        ))
+    }
+}
+
+fn require_in_review(locked: &Locked) -> Result<(), sqlx::Error> {
+    if locked.status == MemoStatus::InReview {
+        Ok(())
+    } else {
+        Err(sqlx::Error::Protocol(
+            "This memo isn't waiting for attorney review.".into(),
+        ))
+    }
+}
+
+async fn write_draft(
+    tx: &mut Tx<'_>,
+    memo_id: &str,
+    title: &str,
+    attorney: Option<&MemoAttorney>,
+    content: &LegalMemoContent,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE legal_memos
+         SET title = $2, attorney_user_id = $3, attorney_name = $4,
+             content = $5::jsonb, updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(memo_id)
+    .bind(title)
+    .bind(attorney.map(|a| a.id.as_str()))
+    .bind(attorney.map(|a| a.name.as_str()).unwrap_or_default())
+    .bind(to_json(content)?)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn add_version(
+    tx: &mut Tx<'_>,
+    memo_id: &str,
+    version: i32,
+    event: VersionEvent,
+    title: &str,
+    content_json: &str,
+    attorney_name: &str,
+    actor_id: &str,
+    actor: &str,
+    comment: &str,
+) -> Result<(), sqlx::Error> {
+    let id = ids::next(&mut **tx, "lv").await?;
+    sqlx::query(
+        "INSERT INTO legal_memo_versions
+             (id, memo_id, version, event, title, content, attorney_name, actor_id, actor_name,
+              comment)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)",
+    )
+    .bind(&id)
+    .bind(memo_id)
+    .bind(version)
+    .bind(event.slug())
+    .bind(title)
+    .bind(content_json)
+    .bind(attorney_name)
+    .bind(actor_id)
+    .bind(actor)
+    .bind(comment)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn record(
+    tx: &mut Tx<'_>,
+    case_id: &str,
+    memo_id: &str,
+    actor: &str,
+    old: &str,
+    new: &str,
+) -> Result<(), sqlx::Error> {
+    audit::record_in_transaction_with_visibility(
+        tx,
+        audit::Entity::Case,
+        case_id,
+        actor,
+        &format!("legal memo {memo_id}"),
+        old,
+        new,
+        Visibility::VolunteerOnly,
+    )
+    .await
 }
