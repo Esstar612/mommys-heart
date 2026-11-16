@@ -31,6 +31,7 @@ pub mod components {
     pub mod contact_cases;
     pub mod contact_form;
     pub mod contact_properties;
+    pub mod design;
     pub mod email_failures;
     pub mod guard;
     pub mod layout;
