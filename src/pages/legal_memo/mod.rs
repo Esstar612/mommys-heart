@@ -1,3 +1,4 @@
+mod approved;
 mod read;
 mod read_tables;
 mod review;
@@ -18,10 +19,12 @@ use crate::components::legal_memos::{matter_label, memo_status_tone, ERRTEXT};
 use crate::components::loading::Loading;
 use crate::server_fns::err_text;
 use crate::server_fns::legal_memos::{
-    legal_memo_versions, load_legal_memo, LegalMemo, MemoStatus, MemoVersionEntry, VersionEvent,
+    legal_memo_versions, load_legal_memo, load_legal_memo_version, LegalMemo, MemoStatus,
+    MemoVersionEntry, MemoVersionSnapshot, VersionEvent,
 };
 use crate::state::AppState;
 
+use approved::{ApprovedAside, Filed};
 use read::{content_cards, header_card};
 use review::ReviewPanel;
 
@@ -200,6 +203,7 @@ pub fn LegalMemoPage() -> impl IntoView {
     let load_error = RwSignal::new(String::new());
     let reload = RwSignal::new(0u32);
     let generation = RwSignal::new(0u32);
+    let viewing = RwSignal::new(None::<MemoVersionSnapshot>);
 
     Effect::new(move |_| {
         reload.track();
@@ -229,6 +233,7 @@ pub fn LegalMemoPage() -> impl IntoView {
             match result {
                 Ok(found) if found.case_id == expected_case => {
                     let _ = load_error.try_set(String::new());
+                    let _ = viewing.try_set(None);
                     let _ = memo.try_set(Some(found));
                 }
                 Ok(_) => {
@@ -259,7 +264,7 @@ pub fn LegalMemoPage() -> impl IntoView {
                     </Show>
                     {move || {
                         if let Some(found) = memo.get() {
-                            return view! { <MemoView memo=found versions=versions on_changed=on_changed /> }.into_any();
+                            return view! { <MemoView memo=found versions=versions viewing=viewing on_changed=on_changed /> }.into_any();
                         }
                         if loading.get() {
                             return view! { <Loading label="Loading legal memo\u{2026}" /> }.into_any();
@@ -282,9 +287,40 @@ pub fn LegalMemoPage() -> impl IntoView {
 fn MemoView(
     memo: LegalMemo,
     versions: RwSignal<Vec<MemoVersionEntry>>,
+    viewing: RwSignal<Option<MemoVersionSnapshot>>,
     on_changed: Callback<()>,
 ) -> impl IntoView {
     let approved = memo.status == MemoStatus::Approved;
+    let memo_id = StoredValue::new(memo.id.clone());
+    let case_id = StoredValue::new(memo.case_id.clone());
+    let opening = RwSignal::new(false);
+    let view_error = RwSignal::new(String::new());
+    let filed = Filed::new(memo.id.clone());
+    if approved {
+        filed.fetch();
+    }
+
+    let open_version = Callback::new(move |version_id: String| {
+        if opening.get_untracked() {
+            return;
+        }
+        opening.set(true);
+        view_error.set(String::new());
+        let id = memo_id.get_value();
+        spawn_local(async move {
+            let result = load_legal_memo_version(id, version_id).await;
+            let _ = opening.try_set(false);
+            match result {
+                Ok(snapshot) => {
+                    let _ = viewing.try_set(Some(snapshot));
+                }
+                Err(e) => {
+                    let _ = view_error.try_set(err_text(e));
+                }
+            }
+        });
+    });
+
     let pills = {
         let version = memo.version;
         if approved {
@@ -310,30 +346,87 @@ fn MemoView(
                 .map(|e| format!("Sent by {}, {}", e.actor_name, when(&e.at)))
         })
     };
-    let actions =
-        view! { <span class=format!("{MUTED} text-[13.5px]")>{sent_line}</span> }.into_any();
-    let title = format!("Legal memo: {}", memo.title);
+    let actions = if approved {
+        view! {
+            {move || match filed.document.get() {
+                Some(doc) => view! { <a class=crate::components::design::BTN href=filed.download_href(&case_id.get_value(), &doc)>"Download"</a> }.into_any(),
+                None => view! { <button type="button" class=crate::components::design::BTN disabled=true>"Download"</button> }.into_any(),
+            }}
+        }
+        .into_any()
+    } else {
+        view! { <span class=format!("{MUTED} text-[13.5px]")>{sent_line}</span> }.into_any()
+    };
+
+    let memo_title = memo.title.clone();
+    let title = move || {
+        let shown = viewing.with(|v| v.as_ref().map(|snap| snap.title.clone()));
+        format!("Legal memo: {}", shown.unwrap_or_else(|| memo_title.clone()))
+    };
     let banner = if approved {
         "Approved for internal use. Not for client distribution."
     } else {
         "Draft for attorney review. Not for client distribution."
     };
-    let can_review = memo.can_review;
+    let aside_width = if approved {
+        "lg:grid-cols-[minmax(0,1fr)_360px]"
+    } else {
+        "lg:grid-cols-[minmax(0,1fr)_380px]"
+    };
+    let has_aside = approved || memo.can_review;
     let memo_sv = StoredValue::new(memo.clone());
+
+    let main = move || match viewing.get() {
+        Some(snapshot) => {
+            let label = format!("You're viewing version {}. ", snapshot.version);
+            let mut shown = memo_sv.get_value();
+            shown.attorney_name = snapshot.attorney_name;
+            shown.content = snapshot.content;
+            shown.status = match snapshot.event {
+                VersionEvent::Sent => MemoStatus::InReview,
+                VersionEvent::RevisionsRequested => MemoStatus::RevisionsRequested,
+                VersionEvent::Approved => MemoStatus::Approved,
+            };
+            view! {
+                <div class="flex flex-wrap items-center gap-3 rounded-[14px] border border-slate-700 bg-sand-50 px-[18px] py-3 text-[14.5px]" role="status">
+                    <span class="font-semibold">{label}</span>
+                    <button type="button" class=crate::components::design::LINK on:click=move |_| viewing.set(None)>"Back to the current version"</button>
+                </div>
+                {header_card(&shown)}
+                {content_cards(&shown.content, &shown.author_name)}
+            }
+            .into_any()
+        }
+        None => memo_sv
+            .with_value(|m| view! { {header_card(m)} {content_cards(&m.content, &m.author_name)} })
+            .into_any(),
+    };
+
     view! {
         <PageHeader back_href=back_href(&memo.case_id) back_label=back_label(&memo) actions=Box::new(move || actions)>
             <h1 class=SERIF_H1>{title}</h1>
             <div class="mt-2 flex flex-wrap gap-2">{pills}</div>
         </PageHeader>
         <DarkBanner>{banner}</DarkBanner>
-        <div class=format!("grid items-start gap-6 {}", if can_review { "lg:grid-cols-[minmax(0,1fr)_380px]" } else { "" })>
-            <div class="flex min-w-0 flex-col gap-4">
-                {memo_sv.with_value(|m| view! { {header_card(m)} {content_cards(&m.content, &m.author_name)} })}
-            </div>
-            {can_review.then(|| view! {
-                <aside class="flex flex-col gap-3.5 lg:sticky lg:top-4" aria-label="About this memo">
-                    <ReviewPanel memo=memo_sv.get_value() on_changed=on_changed />
-                </aside>
+        <Show when=move || !view_error.get().is_empty()>
+            <p class=ERRTEXT role="alert">{move || view_error.get()}</p>
+        </Show>
+        <div class=format!("grid items-start gap-6 {}", if has_aside { aside_width } else { "" })>
+            <div class="flex min-w-0 flex-col gap-4">{main}</div>
+            {has_aside.then(|| {
+                let memo = memo_sv.get_value();
+                view! {
+                    <aside class="flex flex-col gap-3.5 lg:sticky lg:top-4" aria-label="About this memo">
+                        {if approved {
+                            view! {
+                                <ApprovedAside memo=memo filed=filed versions=versions opening=opening on_view=open_version on_changed=on_changed />
+                            }
+                            .into_any()
+                        } else {
+                            view! { <ReviewPanel memo=memo on_changed=on_changed /> }.into_any()
+                        }}
+                    </aside>
+                }
             })}
         </div>
     }
