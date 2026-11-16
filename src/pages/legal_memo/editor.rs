@@ -1,9 +1,10 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+use super::editor_tables::Tables;
 use super::{
-    back_href, back_label, clock, matter, read_tables, section, section_card, status_pill, when,
-    Section, SECTIONS,
+    back_href, back_label, clock, matter, section, section_card, status_pill, when, Section,
+    SECTIONS,
 };
 use crate::components::autosave::Autosaver;
 use crate::components::design::{
@@ -497,6 +498,12 @@ pub(super) fn MemoEditor(
         </div>
     }
     .into_any();
+
+    let tables = Tables {
+        content,
+        touch,
+        attempted,
+    };
     let title_input = view! {
         <label for="memo-title" class="sr-only">"Memo title"</label>
         <h1 class="font-serif text-[30px] font-semibold leading-tight text-slate-200">
@@ -567,13 +574,13 @@ pub(super) fn MemoEditor(
                 {card("ms", safety)}
                 {card("s1", list_rows(|c| &c.questions, |c| &mut c.questions, "Question"))}
                 {card("s2", brief)}
-                {card("s3", view! { {move || content.with(read_tables::facts)} }.into_any())}
-                {card("s4", view! { {move || content.with(read_tables::procedure)} }.into_any())}
-                {card("s5", view! { {move || content.with(read_tables::evidence)} }.into_any())}
-                {card("s6", view! { {move || content.with(read_tables::authorities)} }.into_any())}
+                {card("s3", tables.facts())}
+                {card("s4", tables.procedure())}
+                {card("s5", tables.evidence())}
+                {card("s6", tables.authorities())}
                 {card("s7", analysis)}
                 {card("s8", list_rows(|c| &c.outstanding, |c| &mut c.outstanding, "Outstanding question"))}
-                {card("s9", view! { {move || content.with(read_tables::next_steps)} }.into_any())}
+                {card("s9", tables.next_steps())}
                 <div class="flex flex-wrap items-center justify-end gap-2">{actions(false)}</div>
             </div>
         </div>

@@ -1,5 +1,6 @@
 mod approved;
 mod editor;
+mod editor_tables;
 mod read;
 mod read_tables;
 mod review;
