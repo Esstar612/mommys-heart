@@ -2,21 +2,72 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use super::{
-    back_href, back_label, clock, matter, read_tables, section_card, status_pill, when, SECTIONS,
+    back_href, back_label, clock, matter, read_tables, section, section_card, status_pill, when,
+    Section, SECTIONS,
 };
 use crate::components::autosave::Autosaver;
 use crate::components::design::{
-    icon, DarkBanner, Icon, PageHeader, Segmented, VolunteersOnlyBadge, BTN, BTN_SM, ERRMSG, FIELD,
-    HINT, INPUT, INPUT_READONLY, KICKER, LBL, MUTED, SAVED,
+    icon, DarkBanner, Icon, PageHeader, Segmented, VolunteersOnlyBadge, BTN, BTN_PRIMARY, BTN_SM,
+    ERRMSG, FIELD, HINT, INPUT, INPUT_ERR, INPUT_READONLY, KICKER, LBL, MUTED, SAVED,
 };
 use crate::components::legal_memos::ERRTEXT;
 use crate::server_fns::err_text;
 use crate::server_fns::legal_memos::{
-    memo_attorney_choices, save_legal_memo_draft, validate_draft, LegalMemo, LegalMemoContent,
-    MemoAttorney, MemoFact, MemoStatus, MemoVersionEntry, VersionEvent, ANALYSIS_HEADINGS,
-    MAX_LONG, MAX_ROWS, MAX_SHORT,
+    memo_attorney_choices, problems_before_review, save_legal_memo_draft,
+    send_legal_memo_for_review, validate_draft, EventStatus, EvidenceStatus, LegalMemo,
+    LegalMemoContent, MemoAttorney, MemoFact, MemoProblem, MemoStatus, MemoVersionEntry,
+    VersionEvent, ANALYSIS_HEADINGS, MAX_LONG, MAX_ROWS, MAX_SHORT,
 };
 use crate::state::now_stamp;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mark {
+    Done,
+    Warn,
+    Error,
+}
+
+fn mark_of(s: &Section, attorney: &str, c: &LegalMemoContent) -> Mark {
+    let ok = match s.anchor {
+        "mh" => !attorney.trim().is_empty(),
+        "ms" => match c.safety_flagged {
+            None => false,
+            Some(false) => true,
+            Some(true) => {
+                !c.safety_escalated_on.trim().is_empty() && !c.safety_escalated_to.trim().is_empty()
+            }
+        },
+        "s1" => c.questions.iter().any(|q| !q.trim().is_empty()),
+        "s2" => !c.brief_answer.trim().is_empty(),
+        "s3" => {
+            let facts: Vec<&MemoFact> = c
+                .facts
+                .iter()
+                .filter(|f| !f.text.trim().is_empty())
+                .collect();
+            !facts.is_empty() && facts.iter().all(|f| f.source.is_some())
+        }
+        "s4" => !c
+            .procedure
+            .iter()
+            .any(|p| p.status == EventStatus::Confirmed && p.source.trim().is_empty()),
+        "s5" => !c
+            .evidence
+            .iter()
+            .any(|e| e.status == EvidenceStatus::Reviewed && e.date_received.trim().is_empty()),
+        "s6" => c
+            .authorities
+            .iter()
+            .filter(|a| !a.citation.trim().is_empty())
+            .all(|a| a.treatment_checked),
+        _ => true,
+    };
+    if ok {
+        Mark::Done
+    } else {
+        Mark::Warn
+    }
+}
 
 pub(super) fn add_row(label: &'static str, full: Signal<bool>, on_click: Callback<()>) -> AnyView {
     view! {
@@ -56,8 +107,11 @@ pub(super) fn MemoEditor(
     let attorneys = RwSignal::new(Vec::<MemoAttorney>::new());
     let attorneys_error = RwSignal::new(String::new());
     let stale_attorney = RwSignal::new(String::new());
+    let sending = RwSignal::new(false);
+    let attempted = RwSignal::new(false);
+    let message = RwSignal::new(String::new());
 
-    let autosave = Autosaver::new(RwSignal::new(false), move || {
+    let autosave = Autosaver::new(sending, move || {
         let (Some(id), Some(t), Some(a), Some(c)) = (
             memo_id.try_get_value(),
             title.try_get_untracked(),
@@ -72,6 +126,15 @@ pub(super) fn MemoEditor(
         }))
     });
     let touch = Callback::new(move |_: ()| autosave.changed());
+    let problems = Memo::new(move |_| {
+        if !attempted.get() {
+            return Vec::<MemoProblem>::new();
+        }
+        let a = attorney.get();
+        content.with(|c| problems_before_review(&a, c))
+    });
+    let has_problem =
+        move |key: &'static str| problems.with(|p| p.iter().any(|x| x.section == key));
     let draft_error = Memo::new(move |_| {
         let t = title.get();
         content.with(|c| validate_draft(&t, c).err())
@@ -96,7 +159,50 @@ pub(super) fn MemoEditor(
         }
     });
 
-    let save_now = move |_| autosave.save_now();
+    let save_now = move |_| {
+        if sending.get_untracked() {
+            return;
+        }
+        message.set(String::new());
+        autosave.save_now();
+    };
+    let send = move |_| {
+        if sending.get_untracked() || autosave.saving.get_untracked() {
+            return;
+        }
+        message.set(String::new());
+        let (Some(id), t, a, c) = (
+            memo_id.try_get_value(),
+            title.get_untracked(),
+            attorney.get_untracked(),
+            content.get_untracked(),
+        ) else {
+            return;
+        };
+        if let Err(e) = validate_draft(&t, &c) {
+            message.set(format!("Not sent: {e}"));
+            return;
+        }
+        if !problems_before_review(&a, &c).is_empty() {
+            attempted.set(true);
+            autosave.save_now();
+            return;
+        }
+        let snapshot = autosave.snapshot();
+        sending.set(true);
+        spawn_local(async move {
+            match send_legal_memo_for_review(id, t, a, c).await {
+                Ok(()) => {
+                    autosave.saved_through(snapshot);
+                    let _ = on_changed.try_run(());
+                }
+                Err(e) => {
+                    let _ = message.try_set(format!("Not sent: {}", err_text(e)));
+                    let _ = sending.try_set(false);
+                }
+            }
+        });
+    };
 
     let saved_class = move || {
         autosave.status.with(|status| {
@@ -121,9 +227,22 @@ pub(super) fn MemoEditor(
     let actions = move |live: bool| {
         view! {
             <span class=saved_class role=live.then_some("status")>{saved_text}</span>
-            <button type="button" class=BTN on:click=save_now prop:disabled=move || autosave.saving.get()>
+            <button type="button" class=BTN on:click=save_now prop:disabled=move || autosave.saving.get() || sending.get()>
                 "Save draft"
             </button>
+            <button type="button" class=BTN_PRIMARY on:click=send prop:disabled=move || sending.get() || autosave.saving.get()>
+                {move || if sending.get() { "Sending\u{2026}" } else { "Send for attorney review" }}
+                {icon(Icon::ArrowRight, "h-4 w-4 flex-none")}
+            </button>
+        }
+    };
+    let draft_line = move || {
+        if autosave.saving.get() {
+            "Saving your draft\u{2026}"
+        } else if autosave.failed.with(Option::is_some) || autosave.dirty.get() {
+            "Your latest changes aren't saved yet."
+        } else {
+            "Your draft is saved. Nothing you typed was lost."
         }
     };
     let revision_note = move || {
@@ -143,6 +262,14 @@ pub(super) fn MemoEditor(
                     {SECTIONS
                         .iter()
                         .map(|s| {
+                            let state = move || {
+                                if has_problem(s.problem_key) {
+                                    Mark::Error
+                                } else {
+                                    let a = attorney.get();
+                                    content.with(|c| mark_of(s, &a, c))
+                                }
+                            };
                             let label = match s.number {
                                 Some(n) => format!("{n} {}", s.title),
                                 None => s.title.to_string(),
@@ -150,8 +277,20 @@ pub(super) fn MemoEditor(
                             view! {
                                 <li>
                                     <a href=format!("#{}", s.anchor) class="flex items-center gap-2 rounded-[10px] px-2.5 py-[7px] text-[14px] text-slate-200 no-underline hover:bg-sand-200">
+                                        {move || match state() {
+                                            Mark::Done => view! { <span class="text-ok-700">{icon(Icon::Check, "h-4 w-4 flex-none")}</span> }.into_any(),
+                                            Mark::Warn => view! { <span class="text-primary-600">{icon(Icon::Warning, "h-4 w-4 flex-none")}</span> }.into_any(),
+                                            Mark::Error => view! { <span class="text-danger-600">{icon(Icon::Warning, "h-4 w-4 flex-none")}</span> }.into_any(),
+                                        }}
                                         <span class="flex-1">{label}</span>
                                         {s.required.then(|| view! { <span class=HINT aria-hidden="true">"req."</span><span class="sr-only">"Required"</span> })}
+                                        <span class="sr-only">
+                                            {move || match state() {
+                                                Mark::Done => "Done",
+                                                Mark::Warn => "Not finished",
+                                                Mark::Error => "Needs fixing",
+                                            }}
+                                        </span>
                                     </a>
                                 </li>
                             }
@@ -162,8 +301,10 @@ pub(super) fn MemoEditor(
         }
     };
 
-    let card =
-        |anchor: &'static str, body: AnyView| section_card(anchor, Signal::from(false), body);
+    let card = move |anchor: &'static str, body: AnyView| {
+        let key = section(anchor).problem_key;
+        section_card(anchor, Signal::derive(move || has_problem(key)), body)
+    };
 
     let header = {
         let author = memo.author_name.clone();
@@ -175,7 +316,7 @@ pub(super) fn MemoEditor(
                     <label class=LBL for="memo-to">"To"</label>
                     <select
                         id="memo-to"
-                        class=INPUT
+                        class=move || if has_problem("Header") { INPUT_ERR } else { INPUT }
                         prop:value=move || attorney.get()
                         on:change=move |ev| {
                             attorney.set(event_target_value(&ev));
@@ -317,13 +458,20 @@ pub(super) fn MemoEditor(
 
     let brief = view! {
         <textarea
-            class=INPUT
+            class=move || if has_problem("2 Brief answer") { INPUT_ERR } else { INPUT }
             rows="3"
             maxlength=MAX_LONG
             aria-label="Brief answer"
+            placeholder=move || has_problem("2 Brief answer").then_some("Answer each question in one or two sentences.")
             prop:value=move || content.with(|c| c.brief_answer.clone())
             on:input=move |ev| { let v = event_target_value(&ev); content.update(|c| c.brief_answer = v); touch.run(()); }
         ></textarea>
+        <Show when=move || has_problem("2 Brief answer")>
+            <p class=format!("{ERRMSG} mt-2")>
+                {icon(Icon::Warning, "mt-0.5 h-4 w-4 flex-none")}
+                "Add a brief answer before sending. One or two sentences per question is enough."
+            </p>
+        </Show>
     }
     .into_any();
 
@@ -386,6 +534,32 @@ pub(super) fn MemoEditor(
                 </div>
             })}
         })}
+        <Show when=move || !problems.with(Vec::is_empty)>
+            <div class="rounded-2xl border-2 border-danger-600 bg-danger-50 px-5 py-4" role="alert">
+                <p class="flex items-center gap-2 font-bold text-danger-700">
+                    {icon(Icon::Warning, "h-4 w-4 flex-none")}
+                    {move || {
+                        let n = problems.with(Vec::len);
+                        format!("Can't send for attorney review yet: {n} {} to fix", if n == 1 { "thing" } else { "things" })
+                    }}
+                </p>
+                <ul class="mt-2 flex list-disc flex-col gap-1 pl-[26px]">
+                    {move || problems
+                        .get()
+                        .into_iter()
+                        .map(|p| {
+                            let anchor = SECTIONS.iter().find(|s| s.problem_key == p.section).map(|s| s.anchor).unwrap_or("mh");
+                            view! { <li><a class="text-primary-300 underline-offset-[3px]" href=format!("#{anchor}")>{p.message}</a></li> }
+                        })
+                        .collect_view()}
+                </ul>
+                <p class=format!("{MUTED} mt-2 text-[13.5px]")>{draft_line}</p>
+            </div>
+        </Show>
+        <Show when=move || !message.get().is_empty()>
+            <p class="whitespace-pre-line text-[14.5px] font-semibold text-danger-700" role="alert">{move || message.get()}</p>
+        </Show>
+        <p class=format!("{MUTED} text-[13.5px]")>"Sections marked Required must be filled in before sending. The rest can be skipped on a simple matter."</p>
         <div class="grid items-start gap-6 lg:grid-cols-[250px_minmax(0,1fr)]">
             {nav}
             <div class="flex min-w-0 flex-col gap-4">

@@ -35,6 +35,7 @@ pub(super) struct Section {
     pub number: Option<&'static str>,
     pub title: &'static str,
     pub required: bool,
+    pub problem_key: &'static str,
 }
 
 pub(super) const SECTIONS: &[Section] = &[
@@ -43,66 +44,77 @@ pub(super) const SECTIONS: &[Section] = &[
         number: None,
         title: "Header",
         required: true,
+        problem_key: "Header",
     },
     Section {
         anchor: "ms",
         number: None,
         title: "Safety",
         required: true,
+        problem_key: "Safety",
     },
     Section {
         anchor: "s1",
         number: Some("1"),
         title: "Questions presented",
         required: true,
+        problem_key: "1 Questions presented",
     },
     Section {
         anchor: "s2",
         number: Some("2"),
         title: "Brief answer",
         required: true,
+        problem_key: "2 Brief answer",
     },
     Section {
         anchor: "s3",
         number: Some("3"),
         title: "Relevant facts",
         required: true,
+        problem_key: "3 Relevant facts",
     },
     Section {
         anchor: "s4",
         number: Some("4"),
         title: "Procedural history",
         required: false,
+        problem_key: "4 Procedural history",
     },
     Section {
         anchor: "s5",
         number: Some("5"),
         title: "Evidence log",
         required: false,
+        problem_key: "5 Evidence log",
     },
     Section {
         anchor: "s6",
         number: Some("6"),
         title: "Authorities",
         required: false,
+        problem_key: "6 Authorities",
     },
     Section {
         anchor: "s7",
         number: Some("7"),
         title: "Analysis",
         required: false,
+        problem_key: "7 Analysis",
     },
     Section {
         anchor: "s8",
         number: Some("8"),
         title: "Outstanding questions",
         required: false,
+        problem_key: "8 Outstanding questions",
     },
     Section {
         anchor: "s9",
         number: Some("9"),
         title: "Proposed next steps",
         required: false,
+        problem_key: "9 Proposed next steps",
     },
 ];
 
