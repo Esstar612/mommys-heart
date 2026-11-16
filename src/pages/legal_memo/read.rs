@@ -1,16 +1,28 @@
 use leptos::prelude::*;
 
-use super::{date_long, matter, section_card};
+use super::{date_long, matter, read_tables, section_card};
 use crate::components::case_overview::month_day;
 use crate::components::design::{Icon, StatusPill, Tone, HINT, MUTED};
-use crate::server_fns::legal_memos::{LegalMemo, LegalMemoContent, ANALYSIS_HEADINGS};
+use crate::server_fns::legal_memos::{FactSource, LegalMemo, LegalMemoContent, ANALYSIS_HEADINGS};
 
 fn card(anchor: &'static str, body: AnyView) -> AnyView {
     section_card(anchor, Signal::from(false), body)
 }
 
-fn none() -> AnyView {
+pub(super) fn none() -> AnyView {
     view! { <p class=format!("{MUTED} text-[14.5px]")>"None recorded."</p> }.into_any()
+}
+
+pub(super) fn pill(label: &str, tone: Tone) -> AnyView {
+    view! { <StatusPill label=label.to_string() tone=tone small=true /> }.into_any()
+}
+
+pub(super) fn fact_tone(source: FactSource) -> Tone {
+    match source {
+        FactSource::ClientReports => Tone::Yellow,
+        FactSource::ThirdParty => Tone::Sand,
+        FactSource::Document | FactSource::Verified => Tone::Green,
+    }
 }
 
 pub(super) fn header_card(memo: &LegalMemo) -> AnyView {
@@ -152,8 +164,13 @@ pub(super) fn content_cards(c: &LegalMemoContent, author: &str) -> AnyView {
         {card("ms", safety)}
         {card("s1", questions)}
         {card("s2", brief)}
+        {card("s3", read_tables::facts(c))}
+        {card("s4", read_tables::procedure(c))}
+        {card("s5", read_tables::evidence(c))}
+        {card("s6", read_tables::authorities(c))}
         {card("s7", analysis)}
         {card("s8", outstanding)}
+        {card("s9", read_tables::next_steps(c))}
     }
     .into_any()
 }

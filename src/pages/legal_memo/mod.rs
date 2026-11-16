@@ -1,4 +1,6 @@
 mod read;
+mod read_tables;
+mod review;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -21,6 +23,7 @@ use crate::server_fns::legal_memos::{
 use crate::state::AppState;
 
 use read::{content_cards, header_card};
+use review::ReviewPanel;
 
 pub(super) struct Section {
     pub anchor: &'static str,
@@ -118,6 +121,13 @@ pub(super) fn section(anchor: &str) -> &'static Section {
         .find(|s| s.anchor == anchor)
         .unwrap_or(&SECTIONS[0])
 }
+
+pub(super) const FACT_HELP: &str = "Tag every fact with where it came from: Client reports (the client told us), Document (we have the paper), Third party (someone else told us), Verified (checked against an official record).";
+pub(super) const PROCEDURE_HELP: &str =
+    "A hearing date can't be marked Confirmed without a source document, such as a court notice.";
+pub(super) const EVIDENCE_HELP: &str =
+    "\"Reviewed\" can't be chosen until the item has a date received.";
+pub(super) const AUTHORITY_HELP: &str = "Bracketed values show the format only. Free databases don't track later rulings that overturn or limit a case, so check before relying on one.";
 
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -308,14 +318,23 @@ fn MemoView(
     } else {
         "Draft for attorney review. Not for client distribution."
     };
-    let _ = on_changed;
+    let can_review = memo.can_review;
+    let memo_sv = StoredValue::new(memo.clone());
     view! {
         <PageHeader back_href=back_href(&memo.case_id) back_label=back_label(&memo) actions=Box::new(move || actions)>
             <h1 class=SERIF_H1>{title}</h1>
             <div class="mt-2 flex flex-wrap gap-2">{pills}</div>
         </PageHeader>
         <DarkBanner>{banner}</DarkBanner>
-        {header_card(&memo)}
-        {content_cards(&memo.content, &memo.author_name)}
+        <div class=format!("grid items-start gap-6 {}", if can_review { "lg:grid-cols-[minmax(0,1fr)_380px]" } else { "" })>
+            <div class="flex min-w-0 flex-col gap-4">
+                {memo_sv.with_value(|m| view! { {header_card(m)} {content_cards(&m.content, &m.author_name)} })}
+            </div>
+            {can_review.then(|| view! {
+                <aside class="flex flex-col gap-3.5 lg:sticky lg:top-4" aria-label="About this memo">
+                    <ReviewPanel memo=memo_sv.get_value() on_changed=on_changed />
+                </aside>
+            })}
+        </div>
     }
 }
