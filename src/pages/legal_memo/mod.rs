@@ -1,4 +1,5 @@
 mod approved;
+mod editor;
 mod read;
 mod read_tables;
 mod review;
@@ -25,6 +26,7 @@ use crate::server_fns::legal_memos::{
 use crate::state::AppState;
 
 use approved::{ApprovedAside, Filed};
+use editor::MemoEditor;
 use read::{content_cards, header_card};
 use review::ReviewPanel;
 
@@ -264,7 +266,11 @@ pub fn LegalMemoPage() -> impl IntoView {
                     </Show>
                     {move || {
                         if let Some(found) = memo.get() {
-                            return view! { <MemoView memo=found versions=versions viewing=viewing on_changed=on_changed /> }.into_any();
+                            return if found.can_edit {
+                                view! { <MemoEditor memo=found versions=versions on_changed=on_changed /> }.into_any()
+                            } else {
+                                view! { <MemoView memo=found versions=versions viewing=viewing on_changed=on_changed /> }.into_any()
+                            };
                         }
                         if loading.get() {
                             return view! { <Loading label="Loading legal memo\u{2026}" /> }.into_any();
