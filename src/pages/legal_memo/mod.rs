@@ -1,4 +1,5 @@
 mod read;
+mod read_tables;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -119,6 +120,13 @@ pub(super) fn section(anchor: &str) -> &'static Section {
         .find(|s| s.anchor == anchor)
         .unwrap_or(&SECTIONS[0])
 }
+
+pub(super) const FACT_HELP: &str = "Tag every fact with where it came from: Client reports (the client told us), Document (we have the paper), Third party (someone else told us), Verified (checked against an official record).";
+pub(super) const PROCEDURE_HELP: &str =
+    "A hearing date can't be marked Confirmed without a source document, such as a court notice.";
+pub(super) const EVIDENCE_HELP: &str =
+    "\"Reviewed\" can't be chosen until the item has a date received.";
+pub(super) const AUTHORITY_HELP: &str = "Bracketed values show the format only. Free databases don't track later rulings that overturn or limit a case, so check before relying on one.";
 
 pub(super) fn date_long(stamp: &str) -> String {
     date_parts(stamp)

@@ -1,9 +1,11 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::components::A;
 
-use crate::components::case_overview::avatar_classes;
+use crate::components::case_overview::{avatar_classes, month_day};
 use crate::components::design::{
-    icon, Icon, Tone, BTN_SM, CARD, CARD_HEAD, HINT, KICKER, LINK, MUTED, SERIF_H2, SERIF_PAGE_H2,
+    icon, EdgeTable, Icon, StatusPill, Tone, VolunteersOnlyBadge, BTN_SM, CARD, CARD_HEAD, HINT,
+    KICKER, LINK, MUTED, SERIF_H2, SERIF_PAGE_H2, TD,
 };
 use crate::helpers::format::initials;
 use crate::helpers::new_case_folders::STRATEGY_NOTES;
@@ -11,7 +13,9 @@ use crate::helpers::visibility::Visibility;
 use crate::server_fns::case_contacts::{list_case_contacts, CaseContact, CaseContactRole};
 use crate::server_fns::case_properties::CaseProperty;
 use crate::server_fns::err_text;
-use crate::server_fns::legal_memos::{MemoStatus, COURT_KEYS, DOCKET_KEYS};
+use crate::server_fns::legal_memos::{
+    list_legal_memos, LegalMemoSummary, MemoStatus, COURT_KEYS, DOCKET_KEYS,
+};
 
 pub fn memo_status_tone(status: MemoStatus) -> Tone {
     match status {
@@ -20,6 +24,10 @@ pub fn memo_status_tone(status: MemoStatus) -> Tone {
         MemoStatus::RevisionsRequested => Tone::Red,
         MemoStatus::Approved => Tone::Green,
     }
+}
+
+pub fn memo_href(case_id: &str, memo_id: &str) -> String {
+    format!("/cases/{case_id}/legal-memos/{memo_id}")
 }
 
 pub const ERRTEXT: &str = "text-[13.5px] font-semibold text-danger-700";
@@ -46,6 +54,7 @@ const CLIENT_SEES: &str = "inline-flex items-center gap-[5px] rounded-full borde
 #[component]
 pub fn LegalTab(
     case_id: String,
+    case_name: String,
     client_first_name: String,
     #[prop(into)] properties: Signal<Vec<CaseProperty>>,
     show_contacts: bool,
@@ -68,12 +77,13 @@ pub fn LegalTab(
     };
     let court = move || COURT_KEYS.iter().find_map(|key| shared(*key));
     let docket_entry = move || DOCKET_KEYS.iter().find_map(|key| shared(*key));
-    let docket = move || docket_entry().map(|(v, _)| v).unwrap_or_default();
+    let docket = Signal::derive(move || docket_entry().map(|(v, _)| v).unwrap_or_default());
     let client_sees = StoredValue::new(client.clone());
 
     view! {
         <div class="space-y-[18px]">
             <h2 class=SERIF_PAGE_H2>"Legal"</h2>
+            <LegalMemosCard case_id=case_id.clone() case_name=case_name docket=docket />
             <p class=format!("{KICKER} mt-1 text-[12px]")>"Also on this case"</p>
             <div class="grid items-start gap-[22px] [grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr))]">
                 <section class=format!("{CARD} px-[22px] pt-5 pb-[22px]") aria-labelledby="legal-folder-h">
@@ -113,7 +123,7 @@ pub fn LegalTab(
                         <Show when=move || docket_entry().is_some()>
                             <div class="flex justify-between gap-3 py-2.5">
                                 <dt class=MUTED>"Docket"</dt>
-                                <dd class="text-right">{docket}</dd>
+                                <dd class="text-right">{move || docket.get()}</dd>
                             </div>
                         </Show>
                     </dl>
@@ -127,6 +137,103 @@ pub fn LegalTab(
                 })}
             </div>
         </div>
+    }
+}
+
+#[component]
+fn LegalMemosCard(
+    case_id: String,
+    case_name: String,
+    docket: Signal<String>,
+) -> impl IntoView {
+    let case_sv = StoredValue::new(case_id);
+    let case_name = StoredValue::new(case_name);
+    let memos = RwSignal::new(Vec::<LegalMemoSummary>::new());
+    let loading = RwSignal::new(true);
+    let load_error = RwSignal::new(String::new());
+    let load_case = case_sv.get_value();
+    spawn_local(async move {
+        let found = list_legal_memos(load_case).await;
+        let _ = loading.try_set(false);
+        match found {
+            Ok(list) => {
+                let _ = memos.try_set(list);
+            }
+            Err(e) => {
+                let _ = load_error.try_set(err_text(e));
+            }
+        }
+    });
+
+    let rows = move || {
+        if loading.get() {
+            return view! { <p class=format!("{HINT} mt-3")>"Loading\u{2026}"</p> }.into_any();
+        }
+        if !load_error.get().is_empty() {
+            return view! {
+                <p class=format!("{ERRTEXT} mt-3") role="alert">
+                    {move || format!("Could not load legal memos: {}", load_error.get())}
+                </p>
+            }
+            .into_any();
+        }
+        let list = memos.get();
+        if list.is_empty() {
+            return view! { <p class=format!("{MUTED} mt-3 text-[13.5px]")>"No legal memos on this case yet."</p> }.into_any();
+        }
+        let matter = matter_label(&case_name.get_value(), &docket.get());
+        view! {
+            <div class="mt-2.5">
+                <EdgeTable headers=vec![("Title", None), ("Matter", None), ("Author", None), ("Date", None), ("Status", None)]>
+                    {list
+                        .into_iter()
+                        .map(|memo| {
+                            let href = memo_href(&case_sv.get_value(), &memo.id);
+                            let approved = memo.status == MemoStatus::Approved;
+                            let label = if approved {
+                                format!("{} \u{b7} V{}", memo.status.label(), memo.version)
+                            } else {
+                                memo.status.label().to_string()
+                            };
+                            let tone = memo_status_tone(memo.status);
+                            view! {
+                                <tr>
+                                    <td class=format!("{TD} min-w-[220px]")>
+                                        <A href=href attr:class="font-bold text-slate-200 underline underline-offset-2 hover:text-primary-300">{memo.title}</A>
+                                    </td>
+                                    <td class=format!("{TD} min-w-[200px]")>{matter.clone()}</td>
+                                    <td class=TD>{memo.author_name}</td>
+                                    <td class=format!("{TD} whitespace-nowrap")>{month_day(&memo.updated_on)}</td>
+                                    <td class=TD>
+                                        {if approved {
+                                            view! { <StatusPill label=label tone=tone icon_kind=Icon::Check /> }.into_any()
+                                        } else {
+                                            view! { <StatusPill label=label tone=tone /> }.into_any()
+                                        }}
+                                    </td>
+                                </tr>
+                            }
+                        })
+                        .collect_view()}
+                </EdgeTable>
+            </div>
+        }
+        .into_any()
+    };
+
+    view! {
+        <section class=format!("{CARD} px-[22px] pt-5 pb-[18px]") aria-labelledby="legal-memos-heading">
+            <div class=CARD_HEAD>
+                <div class="flex flex-wrap items-center gap-2.5">
+                    <h3 id="legal-memos-heading" class="font-serif text-[20px] font-semibold">"Legal memos"</h3>
+                    <VolunteersOnlyBadge />
+                </div>
+            </div>
+            <p class=format!("{MUTED} mt-2.5 text-[13.5px]")>
+                "Clients never see memos. Approved memos are also saved to SharePoint: Intake / Legal Memo."
+            </p>
+            {rows}
+        </section>
     }
 }
 

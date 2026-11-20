@@ -1,16 +1,28 @@
 use leptos::prelude::*;
 
-use super::{date_long, matter, section_card};
+use super::{date_long, matter, read_tables, section_card};
 use crate::components::case_overview::month_day;
 use crate::components::design::{Icon, StatusPill, Tone, HINT, MUTED};
-use crate::server_fns::legal_memos::{LegalMemo, LegalMemoContent};
+use crate::server_fns::legal_memos::{FactSource, LegalMemo, LegalMemoContent, ANALYSIS_HEADINGS};
 
 fn card(anchor: &'static str, body: AnyView) -> AnyView {
     section_card(anchor, Signal::from(false), body)
 }
 
-fn none() -> AnyView {
+pub(super) fn none() -> AnyView {
     view! { <p class=format!("{MUTED} text-[14.5px]")>"None recorded."</p> }.into_any()
+}
+
+pub(super) fn pill(label: &str, tone: Tone) -> AnyView {
+    view! { <StatusPill label=label.to_string() tone=tone small=true /> }.into_any()
+}
+
+pub(super) fn fact_tone(source: FactSource) -> Tone {
+    match source {
+        FactSource::ClientReports => Tone::Yellow,
+        FactSource::ThirdParty => Tone::Sand,
+        FactSource::Document | FactSource::Verified => Tone::Green,
+    }
 }
 
 pub(super) fn header_card(memo: &LegalMemo) -> AnyView {
@@ -83,6 +95,22 @@ pub(super) fn content_cards(c: &LegalMemoContent, author: &str) -> AnyView {
         None => view! { <p class=MUTED>"Not answered yet."</p> }.into_any(),
     };
 
+    let questions: Vec<String> = c
+        .questions
+        .iter()
+        .filter(|q| !q.trim().is_empty())
+        .cloned()
+        .collect();
+    let questions = if questions.is_empty() {
+        none()
+    } else {
+        view! {
+            <ol class="flex list-decimal flex-col gap-1.5 pl-[22px]">
+                {questions.into_iter().map(|q| view! { <li class="whitespace-pre-line">{q}</li> }).collect_view()}
+            </ol>
+        }
+        .into_any()
+    };
     let brief = if c.brief_answer.trim().is_empty() {
         none()
     } else {
@@ -90,9 +118,59 @@ pub(super) fn content_cards(c: &LegalMemoContent, author: &str) -> AnyView {
             .into_any()
     };
 
+    let parts: Vec<(&str, String)> = ANALYSIS_HEADINGS
+        .iter()
+        .zip(c.analysis.iter())
+        .filter(|(_, body)| !body.trim().is_empty())
+        .map(|(h, b)| (*h, b.clone()))
+        .collect();
+    let analysis = if parts.is_empty() {
+        none()
+    } else {
+        view! {
+            <div class="flex flex-col gap-3">
+                {parts
+                    .into_iter()
+                    .map(|(heading, body)| view! {
+                        <div>
+                            <p class="font-bold">{heading}</p>
+                            <p class="mt-0.5 whitespace-pre-line">{body}</p>
+                        </div>
+                    })
+                    .collect_view()}
+            </div>
+        }
+        .into_any()
+    };
+
+    let outstanding: Vec<String> = c
+        .outstanding
+        .iter()
+        .filter(|q| !q.trim().is_empty())
+        .cloned()
+        .collect();
+    let outstanding = if outstanding.is_empty() {
+        none()
+    } else {
+        view! {
+            <ul class="flex list-disc flex-col gap-1.5 pl-[22px]">
+                {outstanding.into_iter().map(|q| view! { <li class="whitespace-pre-line">{q}</li> }).collect_view()}
+            </ul>
+        }
+        .into_any()
+    };
+
     view! {
         {card("ms", safety)}
+        {card("s1", questions)}
         {card("s2", brief)}
+        {card("s3", read_tables::facts(c))}
+        {card("s4", read_tables::procedure(c))}
+        {card("s5", read_tables::evidence(c))}
+        {card("s6", read_tables::authorities(c))}
+        {card("s7", analysis)}
+        {card("s8", outstanding)}
+        {card("s9", read_tables::next_steps(c))}
     }
     .into_any()
 }

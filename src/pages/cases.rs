@@ -641,6 +641,7 @@ pub fn CaseDetail(
     // The full case behind the summary — the heavy sub-resources are pulled on
     // demand only for the open case, keeping the list load lightweight.
     let case_sv = StoredValue::new(case_id.clone());
+    let summary_name = StoredValue::new(summary.name.clone());
     let detail = RwSignal::new(None::<Case>);
     let detail_generation = RwSignal::new(0u64);
     // Tracks the in-flight fetch of the full case so the view can show a loading
@@ -2288,6 +2289,7 @@ pub fn CaseDetail(
                     <div class=shown_on(&[CaseTab::Legal])>
                         <LegalTab
                             case_id=case_sv.get_value()
+                            case_name=summary_name.get_value()
                             client_first_name=client_first_name.get_value()
                             properties=Signal::from(overview_properties)
                             show_contacts=has_information_management_access
