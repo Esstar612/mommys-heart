@@ -35,6 +35,7 @@ pub mod components {
     pub mod email_failures;
     pub mod guard;
     pub mod layout;
+    pub mod legal_memos;
     pub mod loading;
     pub mod organization_properties;
     pub mod profile_link;
