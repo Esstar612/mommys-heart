@@ -3,7 +3,7 @@ use leptos::task::spawn_local;
 
 use crate::components::case_overview::avatar_classes;
 use crate::components::design::{
-    icon, Icon, BTN_SM, CARD, CARD_HEAD, HINT, KICKER, LINK, MUTED, SERIF_H2, SERIF_PAGE_H2,
+    icon, Icon, Tone, BTN_SM, CARD, CARD_HEAD, HINT, KICKER, LINK, MUTED, SERIF_H2, SERIF_PAGE_H2,
 };
 use crate::helpers::format::initials;
 use crate::helpers::new_case_folders::STRATEGY_NOTES;
@@ -11,9 +11,26 @@ use crate::helpers::visibility::Visibility;
 use crate::server_fns::case_contacts::{list_case_contacts, CaseContact, CaseContactRole};
 use crate::server_fns::case_properties::CaseProperty;
 use crate::server_fns::err_text;
-use crate::server_fns::legal_memos::{COURT_KEYS, DOCKET_KEYS};
+use crate::server_fns::legal_memos::{MemoStatus, COURT_KEYS, DOCKET_KEYS};
+
+pub fn memo_status_tone(status: MemoStatus) -> Tone {
+    match status {
+        MemoStatus::Draft => Tone::Sand,
+        MemoStatus::InReview => Tone::Yellow,
+        MemoStatus::RevisionsRequested => Tone::Red,
+        MemoStatus::Approved => Tone::Green,
+    }
+}
 
 pub const ERRTEXT: &str = "text-[13.5px] font-semibold text-danger-700";
+
+pub fn matter_label(case_name: &str, docket: &str) -> String {
+    if docket.trim().is_empty() {
+        case_name.to_string()
+    } else {
+        format!("{case_name} \u{b7} {}", docket.trim())
+    }
+}
 
 fn eye_icon() -> impl IntoView {
     view! {

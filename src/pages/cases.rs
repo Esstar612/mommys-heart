@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::A;
-use leptos_router::hooks::use_navigate;
+use leptos_router::hooks::{use_navigate, use_query_map};
 
 use crate::components::case_overview::CaseOverview;
 use crate::components::case_questionnaires::{intake_status, CaseIntakeTaskSummary};
@@ -217,13 +217,23 @@ fn access_label(caps: &[CaseCapability]) -> Option<(&'static str, &'static str)>
 #[component]
 pub fn CaseHomePage() -> impl IntoView {
     let state = expect_context::<AppState>();
-    let selected = RwSignal::new(None::<String>);
+    let linked = use_query_map();
+    let selected = RwSignal::new(linked.read_untracked().get("case"));
     // The folder open in the selected case's document browser, as a path
     // relative to the case folder. Kept here so it survives the reload every
     // case mutation triggers.
     let open_folder = RwSignal::new(String::new());
     // Kept here so the open tab survives CaseDetail remounting on reload.
-    let tab = RwSignal::new(CaseTab::Overview);
+    let tab = RwSignal::new(
+        linked
+            .read_untracked()
+            .get("tab")
+            .and_then(|slug| CaseTab::from_slug(&slug))
+            .unwrap_or(CaseTab::Overview),
+    );
+    if let Some(folder) = tab.get_untracked().folder() {
+        open_folder.set(folder.to_string());
+    }
 
     // The fetched window of case summaries plus the total match count. `query`
     // is bound to the input for instant feedback; `debounced_query` drives the
@@ -382,6 +392,7 @@ pub fn CaseHomePage() -> impl IntoView {
                     />
                 }
                 .into_any(),
+                None if loading.get() => view! { <Loading label="Loading case\u{2026}" /> }.into_any(),
                 None => view! {
                     <p class="text-sm text-slate-400">"Case not found."</p>
                 }
@@ -2181,6 +2192,10 @@ pub fn CaseDetail(
                     )
             })
             .collect();
+        if !tabs.contains(&tab.get_untracked()) {
+            tab.set(CaseTab::Overview);
+            open_folder.set(String::new());
+        }
         let shows_legal = tabs.contains(&CaseTab::Legal);
         let documents_ref = NodeRef::<leptos::html::Div>::new();
         let select_tab = Callback::new(move |t: CaseTab| {

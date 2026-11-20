@@ -60,6 +60,7 @@ pub mod pages {
     pub mod forgot_password;
     pub mod funding;
     pub mod inbox;
+    pub mod legal_memo;
     pub mod login;
     pub mod mfa;
     pub mod organizations;
