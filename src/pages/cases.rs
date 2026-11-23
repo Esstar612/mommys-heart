@@ -573,6 +573,7 @@ pub fn CaseDetail(
         role.is_some_and(|role| role.has_operations_admin_permissions());
     let has_information_management_access = state.has_information_management_access();
     let is_site_admin = role.is_some_and(|role| role.is_site_admin());
+    // The admin's own user page, where case capabilities are granted.
     let access_href = StoredValue::new(
         state
             .current_user_summary
@@ -743,6 +744,8 @@ pub fn CaseDetail(
 
     let begin_edit = move |_| {
         if let Some(c) = live_case() {
+            // Clients keep the single-page layout, and the Intake folder is
+            // volunteer-only, so only staff who can see it are moved there.
             if !is_client && can_read_case_material {
                 tab.set(CaseTab::Intake);
                 open_folder.set(CaseTab::Intake.folder().unwrap_or_default().to_string());
@@ -2151,6 +2154,8 @@ pub fn CaseDetail(
                 open_folder.set(folder.to_string());
             }
         });
+        // Every section stays mounted and is hidden off its tab, so switching
+        // tabs keeps filters and half-typed input and does not refetch.
         let overview_properties =
             Memo::new(move |_| live_case().map(|case| case.properties).unwrap_or_default());
         let overview = move || {

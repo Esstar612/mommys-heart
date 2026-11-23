@@ -94,6 +94,7 @@ pub fn CaseOverview(
     };
     if show_people {
         load_contacts();
+        // The summary reflects changes made in the full list once it closes.
         Effect::new(move |was_open: Option<bool>| {
             let open = managing_people.get();
             if was_open == Some(true) && !open {

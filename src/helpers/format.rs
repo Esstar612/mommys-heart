@@ -8,6 +8,7 @@ pub fn badge_pill(colors: &str) -> String {
     format!("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {colors}")
 }
 
+/// Up to two initials for an avatar, or "?" when there is no name to take them from.
 pub fn initials(name: &str) -> String {
     let found: String = name
         .split_whitespace()
@@ -56,6 +57,7 @@ pub fn human_size(bytes: i64) -> String {
     }
 }
 
+/// A short label summarizing a user's access to a case from their capabilities.
 pub fn access_label(caps: &[CaseCapability]) -> Option<(&'static str, &'static str)> {
     if caps.is_empty() {
         return None;

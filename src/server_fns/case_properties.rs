@@ -209,7 +209,7 @@ pub async fn general_intake_prefill(
     require_cap(&user, &case_id, CaseCapability::AddNotes).await?;
     require_visibility(&user, Visibility::VolunteerOnly)?;
 
-    let Some((first_name, last_name, date_of_birth, phone, email)) =
+    let Some(signup) =
         client_agreements::intake_prefill_for_case(&case_id)
             .await
             .map_err(ServerFnError::new)?
@@ -217,11 +217,11 @@ pub async fn general_intake_prefill(
         return Ok(BTreeMap::new());
     };
     Ok([
-        ("First name", first_name),
-        ("Last name", last_name),
-        ("Date of birth", date_of_birth),
-        ("Phone", phone),
-        ("Email", email),
+        ("First name", signup.first_name),
+        ("Last name", signup.last_name),
+        ("Date of birth", signup.date_of_birth),
+        ("Phone", signup.phone),
+        ("Email", signup.email),
     ]
     .into_iter()
     .filter(|(_, value)| !value.trim().is_empty())

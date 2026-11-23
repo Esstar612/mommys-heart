@@ -651,7 +651,7 @@ pub async fn verify_registration(code: String) -> Result<User, ServerFnError> {
         )
         .await
         .map_err(ServerFnError::new)?;
-        if let Some(emergency) = emergency_contact_input(&agreement) {
+        if let Some(emergency) = emergency_contact_input(&agreement, &signup.case_id) {
             let emergency_id = contacts::create_in(&mut tx, &emergency, &account.full_name())
                 .await
                 .map_err(ServerFnError::new)?;
@@ -884,6 +884,7 @@ pub async fn logout() -> Result<(), ServerFnError> {
 #[cfg(feature = "ssr")]
 fn emergency_contact_input(
     agreement: &crate::helpers::client_details::ClientAgreementDetails,
+    case_id: &str,
 ) -> Option<crate::server_fns::contacts::ContactInput> {
     use crate::server_fns::contacts::{ContactInput, ContactType};
 
@@ -901,5 +902,8 @@ fn emergency_contact_input(
         ..Default::default()
     }
     .validate()
+    .map_err(|error| {
+        tracing::warn!(case_id, %error, "skipped signup emergency contact that failed validation");
+    })
     .ok()
 }
