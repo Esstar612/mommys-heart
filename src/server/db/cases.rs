@@ -5,9 +5,9 @@ use crate::server::db::{
     ids, now_stamp, pool, terms_acceptances, users,
 };
 use crate::server_fns::capabilities::CaseCapability;
+use crate::server_fns::case_notes::CaseNoteAuditAction;
 use crate::server_fns::case_properties::CaseProperty;
 use crate::server_fns::cases::{Case, CaseStatus, CaseSummary, CaseWithdrawal};
-use crate::server_fns::case_notes::CaseNoteAuditAction;
 use crate::server_fns::channels::ChannelKind;
 use crate::server_fns::pagination::Page;
 use crate::server_fns::users::{AccountRole, User};
@@ -68,6 +68,8 @@ fn inactivity_threshold() -> String {
         .to_string()
 }
 
+const CLIENT_VISIBLE_CASE_EVENTS: &str = "('case', 'status', 'name', 'owner')";
+
 /// The `SELECT` list that projects a `cases` row (aliased `c`) into a
 /// [`SummaryRow`]: header fields, the owner's first/last name, and the case's
 /// message count. Callers append their own `WHERE`/`ORDER`/`LIMIT`.
@@ -78,8 +80,6 @@ fn inactivity_threshold() -> String {
 /// client); a viewer-scoped query passes a role test so a client's case list
 /// does not even leak *how many* private staff messages exist. It is always an
 /// internal constant or a bind-parameter reference, never user input.
-const CLIENT_VISIBLE_CASE_EVENTS: &str = "('case', 'status', 'name', 'owner')";
-
 fn summary_select(message_count_scope: &str) -> String {
     format!(
         "SELECT c.id, c.name, c.status, c.review_reason, c.owner_id,
@@ -207,7 +207,7 @@ pub async fn get_summaries_for_user(
     user: &User,
     all_cases: bool,
 ) -> Result<Page<CaseSummary>, sqlx::Error> {
-    let limit = limit.clamp(1, 1_000);
+    let limit = limit.clamp(1, 100);
     let offset = offset.max(0);
 
     // Escaped `%term%` pattern (or `None` for "no filter"), so user input is

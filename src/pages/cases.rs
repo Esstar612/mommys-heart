@@ -54,6 +54,34 @@ pub(crate) fn case_documents_sharepoint_link(found: &CaseDocumentListing) -> Any
 /// How many cases the list loads per "page" (each "Load more" click grows the
 /// visible window by this much).
 const PAGE_SIZE: i64 = 10;
+const MAX_REQUEST: i64 = 100;
+
+async fn fetch_cases(
+    offset: i64,
+    count: i64,
+    search: String,
+    all: bool,
+) -> Result<(Vec<CaseSummary>, i64), ServerFnError> {
+    let mut items = Vec::new();
+    let mut total = 0;
+    while (items.len() as i64) < count {
+        let limit = (count - items.len() as i64).min(MAX_REQUEST);
+        let page = cases::load_case_summaries_for_user(
+            offset + items.len() as i64,
+            limit,
+            search.clone(),
+            all,
+        )
+        .await?;
+        total = page.total;
+        let got = page.items.len() as i64;
+        items.extend(page.items);
+        if got < limit {
+            break;
+        }
+    }
+    Ok((items, total))
+}
 
 /// One editable property row while a case is in edit mode
 #[derive(Clone, Copy)]
@@ -243,7 +271,7 @@ pub fn CaseHomePage() -> impl IntoView {
     let request_generation = RwSignal::new(0u64);
 
     Effect::new(move |_| {
-        let count = window.get();
+        let count = window.get_untracked();
         let q = debounced_query.get();
         let all = all_cases.get();
         reload.track();
@@ -254,14 +282,14 @@ pub fn CaseHomePage() -> impl IntoView {
         let generation = request_generation.get_untracked();
         loading.set(true);
         spawn_local(async move {
-            let result = cases::load_case_summaries_for_user(0, count, q, all).await;
+            let result = fetch_cases(0, count, q, all).await;
             if request_generation.try_get_untracked() != Some(generation) {
                 return;
             }
             match result {
-                Ok(page) => {
-                    let _ = cases.try_set(page.items);
-                    let _ = total.try_set(page.total);
+                Ok((items, tot)) => {
+                    let _ = cases.try_set(items);
+                    let _ = total.try_set(tot);
                     let _ = load_error.try_set(None);
                 }
                 Err(e) => {
@@ -271,6 +299,42 @@ pub fn CaseHomePage() -> impl IntoView {
             let _ = loading.try_set(false);
         });
     });
+
+    let load_more = move || {
+        let offset = cases.with_untracked(|list| list.len() as i64);
+        let q = debounced_query.get_untracked();
+        let all = all_cases.get_untracked();
+        let generation = request_generation.get_untracked();
+        loading.set(true);
+        spawn_local(async move {
+            let result = fetch_cases(offset, PAGE_SIZE, q, all).await;
+            if request_generation.try_get_untracked() != Some(generation) {
+                return;
+            }
+            match result {
+                Ok((items, tot)) => {
+                    let _ = cases.try_update(|list| {
+                        for c in items {
+                            if !list.iter().any(|existing| existing.id == c.id) {
+                                list.push(c);
+                            }
+                        }
+                    });
+                    let _ = window.try_set(
+                        cases
+                            .with_untracked(|list| list.len() as i64)
+                            .max(PAGE_SIZE),
+                    );
+                    let _ = total.try_set(tot);
+                    let _ = load_error.try_set(None);
+                }
+                Err(e) => {
+                    let _ = load_error.try_set(Some(err_text(e)));
+                }
+            }
+            let _ = loading.try_set(false);
+        });
+    };
 
     require_login(state, move || {
         let cases_list = move || {
@@ -356,7 +420,7 @@ pub fn CaseHomePage() -> impl IntoView {
                 <p class="text-xs text-slate-500">"Showing " {shown} " of " {tot}</p>
                 <Show when=move || more>
                     <button
-                        on:click=move |_| window.update(|w| *w += PAGE_SIZE)
+                        on:click=move |_| load_more()
                         prop:disabled=move || loading.get()
                         class="rounded-full border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50"
                     >
