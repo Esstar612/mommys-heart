@@ -3,8 +3,6 @@ name: Smoke Test
 # Basic check on every PR: the app compiles and launches without errors.
 on:
   pull_request:
-  push:
-    branches: [main]
 
 concurrency:
   group: smoke-test-${{ github.ref }}
