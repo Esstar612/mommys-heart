@@ -39,6 +39,8 @@ pub fn ContactDetail(contact_id: String) -> impl IntoView {
     let editing = RwSignal::new(false);
     let reload = RwSignal::new(0u32);
     let organizations = RwSignal::new(Vec::<(String, String)>::new());
+    // Filled by the outreach panel, which already loads the categories.
+    let category_labels = RwSignal::new(Vec::<String>::new());
 
     Effect::new(move |_| {
         spawn_local(async move {
@@ -115,6 +117,17 @@ pub fn ContactDetail(contact_id: String) -> impl IntoView {
                                             <span class=badge_pill(t.badge_classes())>{t.label()}</span>
                                         })
                                         .collect_view()}
+                                    {move || {
+                                        category_labels
+                                            .get()
+                                            .into_iter()
+                                            .map(|label| view! {
+                                                <span class=badge_pill("bg-primary-500/15 text-primary-300 ring-1 ring-primary-500/30")>
+                                                    {label}
+                                                </span>
+                                            })
+                                            .collect_view()
+                                    }}
                                 </div>
                             </div>
                             <div class="flex shrink-0 flex-wrap gap-2">
@@ -169,6 +182,7 @@ pub fn ContactDetail(contact_id: String) -> impl IntoView {
                     <ContactOutreachPanel
                         contact_id=id.get_value()
                         contact_changed=Callback::new(move |()| reload.update(|value| *value += 1))
+                        on_categories=Callback::new(move |labels| category_labels.set(labels))
                     />
 
                     <Show when=move || person.has_account_field_conflict>
