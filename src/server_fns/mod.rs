@@ -41,6 +41,7 @@ pub mod duplicates;
 pub mod email_failures;
 pub mod funding;
 pub mod grants;
+pub mod legal_memos;
 pub mod message;
 pub mod organization_properties;
 pub mod organizations;
