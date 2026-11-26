@@ -18,6 +18,35 @@ coded_enum!(VersionEvent {
     Withdrawn => ("withdrawn", "Withdrawn from review"),
 });
 
+coded_enum!(FactSource {
+    ClientReports => ("client_reports", "Client reports"),
+    Document => ("document", "Document"),
+    ThirdParty => ("third_party", "Third party"),
+    Verified => ("verified", "Verified"),
+});
+
+coded_enum!(EventStatus {
+    Unconfirmed => ("unconfirmed", "Unconfirmed"),
+    Confirmed => ("confirmed", "Confirmed"),
+});
+
+coded_enum!(EvidenceStatus {
+    NotReceived => ("not_received", "Not received"),
+    Received => ("received", "Received"),
+    Reviewed => ("reviewed", "Reviewed"),
+});
+
+coded_enum!(ReviewCheck {
+    FactsVerified => ("facts_verified", "Facts verified"),
+    ResearchChecked => ("research_checked", "Research and subsequent treatment checked"),
+    AnalysisRevised => ("analysis_revised", "Analysis revised"),
+});
+
+impl ReviewCheck {
+    pub const REQUIRED_FOR_APPROVAL: &'static [ReviewCheck] =
+        &[ReviewCheck::FactsVerified, ReviewCheck::ResearchChecked];
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MemoLine {
@@ -28,6 +57,59 @@ pub struct MemoLine {
 #[serde(default)]
 pub struct MemoFact {
     pub text: String,
+    pub source: Option<FactSource>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProcedureEvent {
+    pub date: String,
+    pub event: String,
+    pub source: String,
+    pub status: EventStatus,
+}
+
+impl Default for ProcedureEvent {
+    fn default() -> Self {
+        Self {
+            date: String::new(),
+            event: String::new(),
+            source: String::new(),
+            status: EventStatus::Unconfirmed,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EvidenceItem {
+    pub item: String,
+    pub source: String,
+    pub status: EvidenceStatus,
+    pub date_received: String,
+    pub follow_up: String,
+}
+
+impl Default for EvidenceItem {
+    fn default() -> Self {
+        Self {
+            item: String::new(),
+            source: String::new(),
+            status: EvidenceStatus::NotReceived,
+            date_received: String::new(),
+            follow_up: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Authority {
+    pub citation: String,
+    pub court_level: String,
+    pub link: String,
+    pub date_checked: String,
+    pub treatment_checked: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -41,18 +123,45 @@ pub struct AnalysisSection {
 #[serde(default)]
 pub struct NextStep {
     pub action: String,
+    pub owner: String,
+    pub timing: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LegalMemoContent {
     pub memo_date: String,
+    pub safety_flagged: Option<bool>,
+    pub safety_escalated_on: String,
+    pub safety_escalated_to: String,
     pub questions: Vec<MemoLine>,
     pub brief_answer: String,
     pub facts: Vec<MemoFact>,
+    pub procedure: Vec<ProcedureEvent>,
+    pub evidence: Vec<EvidenceItem>,
+    pub authorities: Vec<Authority>,
     pub analysis: Vec<AnalysisSection>,
     pub outstanding: Vec<MemoLine>,
     pub next_steps: Vec<NextStep>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReviewMark {
+    pub check: ReviewCheck,
+    pub by_name: String,
+    pub at: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoReview {
+    pub marks: Vec<ReviewMark>,
+}
+
+impl MemoReview {
+    pub fn has(&self, check: ReviewCheck) -> bool {
+        self.marks.iter().any(|m| m.check == check)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -86,6 +195,7 @@ pub struct LegalMemo {
     pub author_id: String,
     pub author_name: String,
     pub content: LegalMemoContent,
+    pub review: MemoReview,
     pub approved_by_name: String,
     pub approved_at: String,
     pub revision: String,
@@ -95,6 +205,29 @@ pub struct LegalMemo {
     pub can_edit: bool,
     pub can_review: bool,
     pub can_withdraw: bool,
+    pub can_start_new: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MemoVersionEntry {
+    pub id: String,
+    pub version: i32,
+    pub event: VersionEvent,
+    pub actor_name: String,
+    pub comment: String,
+    pub at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MemoVersionSnapshot {
+    pub version: i32,
+    pub event: VersionEvent,
+    pub title: String,
+    pub content: LegalMemoContent,
+    pub review: MemoReview,
+    pub attorney_name: String,
+    pub actor_name: String,
+    pub at: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -103,13 +236,35 @@ pub struct MemoAttorney {
     pub name: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MemoFiledDocument {
+    pub version: i32,
+    pub file_name: String,
+    pub relative_path: String,
+    pub filed_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MemoProblem {
+    pub section: String,
+    pub message: String,
+}
+
 pub const STALE_MEMO_ERROR: &str =
     "This memo was changed in another window. Reload to get the latest version.";
 
+pub const MEMO_FOLDER: [&str; 2] = ["Intake", "Legal Memo"];
 pub const DOCKET_KEYS: [&str; 2] = ["Index or docket number", "Docket number 1"];
+pub const COURT_KEYS: [&str; 3] = ["Court location", "Court", "Court 1"];
 
 pub const MAX_MEMO_TEXT: usize = 10_000;
 pub const MAX_ROWS: usize = 50;
+
+pub const SECTION_HEADER: &str = "Header";
+pub const SECTION_SAFETY: &str = "Safety";
+pub const SECTION_QUESTIONS: &str = "1 Questions presented";
+pub const SECTION_BRIEF: &str = "2 Brief answer";
+pub const SECTION_FACTS: &str = "3 Relevant facts";
 
 pub fn validate_draft(title: &str, content: &LegalMemoContent) -> Result<(), String> {
     if title.trim().is_empty() {
@@ -117,13 +272,23 @@ pub fn validate_draft(title: &str, content: &LegalMemoContent) -> Result<(), Str
     }
     let short = |value: &str, label: &str| check_len(value, label, MAX_SHORT_TEXT);
     let long = |value: &str, label: &str| check_len(value, label, MAX_MEMO_TEXT);
+    let date = |value: &str, label: &str| {
+        if value.is_empty() || parse_iso(value).is_some() {
+            Ok(())
+        } else {
+            Err(format!("The {label} must be a real date."))
+        }
+    };
     short(title, "title")?;
-    if !content.memo_date.is_empty() && parse_iso(&content.memo_date).is_none() {
-        return Err("The date must be a real date.".to_string());
-    }
+    date(&content.memo_date, "date")?;
+    date(&content.safety_escalated_on, "escalation date")?;
+    short(&content.safety_escalated_to, "escalated to")?;
     long(&content.brief_answer, "brief answer")?;
     rows(content.questions.len(), "questions")?;
     rows(content.facts.len(), "facts")?;
+    rows(content.procedure.len(), "procedural history")?;
+    rows(content.evidence.len(), "evidence log")?;
+    rows(content.authorities.len(), "authorities")?;
     rows(content.analysis.len(), "analysis")?;
     rows(content.outstanding.len(), "outstanding questions")?;
     rows(content.next_steps.len(), "next steps")?;
@@ -132,6 +297,29 @@ pub fn validate_draft(title: &str, content: &LegalMemoContent) -> Result<(), Str
     }
     for f in &content.facts {
         long(&f.text, "fact")?;
+    }
+    for p in &content.procedure {
+        short(&p.date, "event date")?;
+        long(&p.event, "event")?;
+        short(&p.source, "event source")?;
+        if p.status == EventStatus::Confirmed && p.source.trim().is_empty() {
+            return Err("An event can't be Confirmed without a source document.".to_string());
+        }
+    }
+    for e in &content.evidence {
+        long(&e.item, "evidence item")?;
+        short(&e.source, "evidence source")?;
+        date(&e.date_received, "date received")?;
+        long(&e.follow_up, "follow-up")?;
+        if e.status == EvidenceStatus::Reviewed && e.date_received.is_empty() {
+            return Err("Evidence can't be Reviewed before it has a date received.".to_string());
+        }
+    }
+    for a in &content.authorities {
+        long(&a.citation, "citation")?;
+        short(&a.court_level, "court level")?;
+        long(&a.link, "link")?;
+        date(&a.date_checked, "date checked")?;
     }
     for a in &content.analysis {
         short(&a.heading, "analysis heading")?;
@@ -142,22 +330,75 @@ pub fn validate_draft(title: &str, content: &LegalMemoContent) -> Result<(), Str
     }
     for n in &content.next_steps {
         long(&n.action, "next step")?;
+        short(&n.owner, "proposed owner")?;
+        short(&n.timing, "timing")?;
     }
     Ok(())
 }
 
-pub fn problems_before_review(attorney_id: &str, content: &LegalMemoContent) -> Vec<&'static str> {
+pub fn problems_before_review(attorney_id: &str, content: &LegalMemoContent) -> Vec<MemoProblem> {
     let mut out = Vec::new();
+    let mut push = |section: &str, message: String| {
+        out.push(MemoProblem {
+            section: section.to_string(),
+            message,
+        })
+    };
     if attorney_id.trim().is_empty() {
-        out.push("Choose the reviewer this memo goes to.");
+        push(
+            SECTION_HEADER,
+            "Choose the reviewer this memo goes to.".into(),
+        );
+    }
+    match content.safety_flagged {
+        None => push(
+            SECTION_SAFETY,
+            "Answer whether a safety concern was flagged.".into(),
+        ),
+        Some(true)
+            if content.safety_escalated_on.is_empty()
+                || content.safety_escalated_to.trim().is_empty() =>
+        {
+            push(
+                SECTION_SAFETY,
+                "Add the date the safety concern was escalated and who it was escalated to.".into(),
+            )
+        }
+        _ => {}
     }
     if !content.questions.iter().any(|q| !q.text.trim().is_empty()) {
-        out.push("Add at least one question presented.");
+        push(
+            SECTION_QUESTIONS,
+            "Add at least one question presented.".into(),
+        );
     }
     if content.brief_answer.trim().is_empty() {
-        out.push("Add a brief answer.");
+        push(SECTION_BRIEF, "Add a brief answer.".into());
+    }
+    let facts: Vec<&MemoFact> = content
+        .facts
+        .iter()
+        .filter(|f| !f.text.trim().is_empty())
+        .collect();
+    if facts.is_empty() {
+        push(SECTION_FACTS, "Add at least one relevant fact.".into());
+    }
+    for fact in facts.iter().filter(|f| f.source.is_none()) {
+        push(
+            SECTION_FACTS,
+            format!("\"{}\" needs a source.", excerpt(&fact.text)),
+        );
     }
     out
+}
+
+fn excerpt(text: &str) -> String {
+    let text = text.trim();
+    if text.chars().count() > 60 {
+        format!("{}\u{2026}", text.chars().take(60).collect::<String>())
+    } else {
+        text.to_string()
+    }
 }
 
 fn check_len(value: &str, label: &str, max: usize) -> Result<(), String> {
@@ -215,6 +456,10 @@ pub async fn load_legal_memo(memo_id: String) -> Result<LegalMemo, ServerFnError
         && memo.status == MemoStatus::InReview
         && memo.author_id != user.id
         && memo.attorney_id == user.id;
+    memo.can_start_new = writable
+        && memo.author_id == user.id
+        && memo.status == MemoStatus::Approved
+        && can_add_notes(&user, &case_id).await;
     Ok(memo)
 }
 
@@ -297,7 +542,8 @@ pub async fn send_legal_memo_for_review(
     validate_draft(&title, &content).map_err(ServerFnError::new)?;
     let problems = problems_before_review(&attorney_id, &content);
     if !problems.is_empty() {
-        return Err(ServerFnError::new(problems.join("\n")));
+        let lines: Vec<String> = problems.into_iter().map(|p| p.message).collect();
+        return Err(ServerFnError::new(lines.join("\n")));
     }
     let attorney =
         attorney.ok_or_else(|| ServerFnError::new("Choose the reviewer this memo goes to."))?;
@@ -365,7 +611,115 @@ pub async fn approve_legal_memo(
         &comment,
     )
     .await
+    .map_err(memo_error)?;
+    crate::server::case_records::legal_memo::file_memo_in_background(memo_id, version);
+    Ok(())
+}
+
+#[server(prefix = "/api")]
+pub async fn set_memo_review_check(
+    memo_id: String,
+    version: i32,
+    check: ReviewCheck,
+    checked: bool,
+) -> Result<MemoReview, ServerFnError> {
+    use crate::server::db::legal_memos;
+    use crate::server::permissions::require_user;
+
+    let user = require_user().await?;
+    let case_id = authorize_memo_review(&user, &memo_id).await?;
+    legal_memos::set_review_check(
+        &memo_id,
+        &case_id,
+        version,
+        check,
+        checked,
+        &user.id,
+        &user.full_name(),
+    )
+    .await
     .map_err(memo_error)
+}
+
+#[server(prefix = "/api")]
+pub async fn start_new_memo_version(memo_id: String) -> Result<(), ServerFnError> {
+    use crate::server::db::legal_memos;
+    use crate::server::permissions::require_user;
+
+    let user = require_user().await?;
+    let case_id = authorize_memo_author(&user, &memo_id).await?;
+    legal_memos::start_new_version(&memo_id, &case_id, &user.id, &user.full_name())
+        .await
+        .map_err(memo_error)
+}
+
+#[server(prefix = "/api")]
+pub async fn legal_memo_versions(memo_id: String) -> Result<Vec<MemoVersionEntry>, ServerFnError> {
+    use crate::server::db::legal_memos;
+    use crate::server::permissions::require_user;
+
+    let user = require_user().await?;
+    authorize_memo_read(&user, &memo_id).await?;
+    legal_memos::versions(&memo_id).await.map_err(memo_error)
+}
+
+#[server(prefix = "/api")]
+pub async fn load_legal_memo_version(
+    memo_id: String,
+    version_id: String,
+) -> Result<MemoVersionSnapshot, ServerFnError> {
+    use crate::server::db::legal_memos;
+    use crate::server::permissions::require_user;
+
+    let user = require_user().await?;
+    authorize_memo_read(&user, &memo_id).await?;
+    legal_memos::version_snapshot(&memo_id, &version_id)
+        .await
+        .map_err(memo_error)?
+        .ok_or_else(|| ServerFnError::new("That version was not found."))
+}
+
+#[server(prefix = "/api")]
+pub async fn legal_memo_document(
+    memo_id: String,
+) -> Result<Option<MemoFiledDocument>, ServerFnError> {
+    use crate::server::db::case_record_files;
+    use crate::server::permissions::require_user;
+
+    let user = require_user().await?;
+    authorize_memo_read(&user, &memo_id).await?;
+    Ok(
+        case_record_files::latest(crate::server::case_records::legal_memo::KIND, &memo_id)
+            .await
+            .map_err(memo_error)?
+            .map(|filed| MemoFiledDocument {
+                version: filed.version,
+                file_name: filed.file_name,
+                relative_path: filed.relative_path,
+                filed_at: filed.filed_at,
+            }),
+    )
+}
+
+#[server(prefix = "/api")]
+pub async fn file_legal_memo_document(memo_id: String) -> Result<(), ServerFnError> {
+    use crate::server::db::legal_memos;
+    use crate::server::permissions::{require_cap, require_user};
+    use crate::server_fns::capabilities::CaseCapability;
+
+    let user = require_user().await?;
+    let case_id = authorize_memo_read(&user, &memo_id).await?.case_id;
+    require_cap(&user, &case_id, CaseCapability::AddNotes).await?;
+    let version = legal_memos::latest_approved_version(&memo_id)
+        .await
+        .map_err(memo_error)?
+        .ok_or_else(|| ServerFnError::new("Only an approved memo is filed."))?;
+    crate::server::case_records::legal_memo::file_memo(&memo_id, version)
+        .await
+        .map_err(|e| {
+            tracing::warn!("filing legal memo {memo_id} version {version} failed: {e}");
+            ServerFnError::new("The memo couldn't be filed. Try again later.")
+        })
 }
 
 #[server(prefix = "/api")]
