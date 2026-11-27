@@ -22,13 +22,8 @@ fn hint(text: &'static str) -> AnyView {
 }
 
 pub(super) fn facts(c: &LegalMemoContent) -> AnyView {
-    let facts: Vec<_> = c
-        .facts
-        .iter()
-        .filter(|f| !f.text.trim().is_empty())
-        .cloned()
-        .collect();
-    let facts = view! {
+    let facts: Vec<_> = c.facts.iter().filter(|f| !f.is_blank()).cloned().collect();
+    view! {
         {hint(FACT_HELP)}
         {if facts.is_empty() {
             none()
@@ -54,15 +49,14 @@ pub(super) fn facts(c: &LegalMemoContent) -> AnyView {
             .into_any()
         }}
     }
-    .into_any();
-    facts
+    .into_any()
 }
 
 pub(super) fn procedure(c: &LegalMemoContent) -> AnyView {
     let procedure: Vec<_> = c
         .procedure
         .iter()
-        .filter(|p| !p.event.trim().is_empty() || !p.date.trim().is_empty())
+        .filter(|p| !p.is_blank())
         .cloned()
         .collect();
     let procedure = view! {
@@ -101,7 +95,7 @@ pub(super) fn evidence(c: &LegalMemoContent) -> AnyView {
     let evidence: Vec<_> = c
         .evidence
         .iter()
-        .filter(|e| !e.item.trim().is_empty())
+        .filter(|e| !e.is_blank())
         .cloned()
         .collect();
     let evidence = view! {
@@ -148,7 +142,7 @@ pub(super) fn authorities(c: &LegalMemoContent) -> AnyView {
     let authorities: Vec<_> = c
         .authorities
         .iter()
-        .filter(|a| !a.citation.trim().is_empty())
+        .filter(|a| !a.is_blank())
         .cloned()
         .collect();
     let authorities = view! {
@@ -198,10 +192,10 @@ pub(super) fn next_steps(c: &LegalMemoContent) -> AnyView {
     let steps: Vec<_> = c
         .next_steps
         .iter()
-        .filter(|n| !n.action.trim().is_empty())
+        .filter(|n| !n.is_blank())
         .cloned()
         .collect();
-    let steps = if steps.is_empty() {
+    if steps.is_empty() {
         none()
     } else {
         view! {
@@ -215,6 +209,5 @@ pub(super) fn next_steps(c: &LegalMemoContent) -> AnyView {
             </EdgeTable>
         }
         .into_any()
-    };
-    steps
+    }
 }

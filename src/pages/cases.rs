@@ -2288,6 +2288,7 @@ pub fn CaseDetail(
                             })
                             on_edit_fields=Callback::new(move |_| select_tab.run(CaseTab::Intake))
                             on_manage_people=Callback::new(move |_| select_tab.run(CaseTab::Overview))
+                            shown=Signal::derive(move || tab.get() == CaseTab::Legal)
                         />
                     </div>
                 })}

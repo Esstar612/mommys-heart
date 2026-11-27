@@ -10,7 +10,7 @@ pub async fn file_case_document(
     folder: &[&str],
     file_name: &str,
     bytes: Vec<u8>,
-) -> Result<String, String> {
+) -> Result<(), String> {
     let case_folder = sharepoint::sync::ensure_folder_ref(case_id).await?;
     let store = sharepoint::store()?;
     let mut parent = case_folder.item_id;
@@ -18,13 +18,7 @@ pub async fn file_case_document(
         parent = store.ensure_folder(&parent, segment).await?.item_id;
     }
     store.upload(&parent, file_name, bytes, DOCX_MIME).await?;
-    store
-        .list_children(&parent)
-        .await?
-        .into_iter()
-        .find(|entry| entry.name == file_name && !entry.web_url.is_empty())
-        .map(|entry| entry.web_url)
-        .ok_or_else(|| format!("'{file_name}' was uploaded but its link could not be read back"))
+    Ok(())
 }
 
 pub fn start_filing_backfill() {

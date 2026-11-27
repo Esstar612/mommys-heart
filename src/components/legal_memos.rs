@@ -33,14 +33,6 @@ pub fn memo_href(case_id: &str, memo_id: &str) -> String {
     format!("/cases/{case_id}/legal-memos/{memo_id}")
 }
 
-pub fn matter_label(case_name: &str, docket: &str) -> String {
-    if docket.trim().is_empty() {
-        case_name.to_string()
-    } else {
-        format!("{case_name} \u{b7} {}", docket.trim())
-    }
-}
-
 fn eye_icon() -> impl IntoView {
     view! {
         <svg class="h-3.5 w-3.5 flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
@@ -63,6 +55,7 @@ pub fn LegalTab(
     on_open_strategy: Callback<()>,
     on_edit_fields: Callback<()>,
     on_manage_people: Callback<()>,
+    #[prop(into)] shown: Signal<bool>,
 ) -> impl IntoView {
     let client = if client_first_name.trim().is_empty() {
         "The client".to_string()
@@ -76,8 +69,8 @@ pub fn LegalTab(
                 .map(|p| (p.value.clone(), p.visibility == Visibility::Shared))
         })
     };
-    let court = move || COURT_KEYS.iter().find_map(|key| shared(*key));
-    let docket_entry = move || DOCKET_KEYS.iter().find_map(|key| shared(*key));
+    let court = move || COURT_KEYS.iter().find_map(|key| shared(key));
+    let docket_entry = move || DOCKET_KEYS.iter().find_map(|key| shared(key));
     let client_sees = StoredValue::new(client.clone());
 
     view! {
@@ -133,7 +126,7 @@ pub fn LegalTab(
                     </p>
                 </section>
                 {show_contacts.then(|| view! {
-                    <LegalContactsCard case_id=case_id.clone() can_edit_people=can_edit_people on_manage_people=on_manage_people />
+                    <LegalContactsCard case_id=case_id.clone() can_edit_people=can_edit_people on_manage_people=on_manage_people shown=shown />
                 })}
             </div>
         </div>
@@ -269,30 +262,45 @@ fn LegalContactsCard(
     case_id: String,
     can_edit_people: bool,
     on_manage_people: Callback<()>,
+    shown: Signal<bool>,
 ) -> impl IntoView {
+    let case_id = StoredValue::new(case_id);
     let contacts = RwSignal::new(Vec::<CaseContact>::new());
     let loading = RwSignal::new(true);
     let error = RwSignal::new(String::new());
-    spawn_local(async move {
-        let found = list_case_contacts(case_id).await;
-        let _ = loading.try_set(false);
-        match found {
-            Ok(list) => {
-                let _ = contacts.try_set(
-                    list.into_iter()
-                        .filter(|c| {
-                            matches!(
-                                c.role,
-                                CaseContactRole::Attorney | CaseContactRole::CourtProfessional
-                            )
-                        })
-                        .collect(),
-                );
-            }
-            Err(e) => {
-                let _ = error.try_set(err_text(e));
-            }
+    let latest = StoredValue::new(0u32);
+    Effect::new(move |_| {
+        if !shown.get() {
+            return;
         }
+        latest.update_value(|n| *n += 1);
+        let mine = latest.get_value();
+        let id = case_id.get_value();
+        spawn_local(async move {
+            let found = list_case_contacts(id).await;
+            if latest.try_get_value() != Some(mine) {
+                return;
+            }
+            let _ = loading.try_set(false);
+            match found {
+                Ok(list) => {
+                    let _ = error.try_set(String::new());
+                    let _ = contacts.try_set(
+                        list.into_iter()
+                            .filter(|c| {
+                                matches!(
+                                    c.role,
+                                    CaseContactRole::Attorney | CaseContactRole::CourtProfessional
+                                )
+                            })
+                            .collect(),
+                    );
+                }
+                Err(e) => {
+                    let _ = error.try_set(err_text(e));
+                }
+            }
+        });
     });
 
     view! {

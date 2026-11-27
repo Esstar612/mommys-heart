@@ -5,6 +5,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::use_navigate;
 
+use super::approved::HistoryCard;
 use super::editor_tables::Tables;
 use super::{back_href, back_label, clock, matter, section_card, status_pill, when, SECTIONS};
 use crate::components::autosave::Autosaver;
@@ -18,8 +19,8 @@ use crate::server_fns::err_text;
 use crate::server_fns::legal_memos::{
     delete_legal_memo_draft, memo_attorney_choices, problems_before_review, save_legal_memo_draft,
     send_legal_memo_for_review, validate_draft, AnalysisSection, LegalMemo, LegalMemoContent,
-    MemoAttorney, MemoFact, MemoLine, MemoProblem, MemoStatus, MAX_MEMO_TEXT, MAX_ROWS,
-    SECTION_BRIEF, SECTION_HEADER, STALE_MEMO_ERROR,
+    MemoAttorney, MemoFact, MemoLine, MemoProblem, MemoStatus, MemoVersionEntry, MAX_MEMO_TEXT,
+    MAX_ROWS, SECTION_BRIEF, SECTION_HEADER, STALE_MEMO_ERROR,
 };
 use crate::state::now_stamp;
 
@@ -82,7 +83,11 @@ pub(super) fn add_row(label: &'static str, full: Signal<bool>, on_click: Callbac
 }
 
 #[component]
-pub(super) fn MemoEditor(memo: LegalMemo, on_changed: Callback<()>) -> impl IntoView {
+pub(super) fn MemoEditor(
+    memo: LegalMemo,
+    versions: RwSignal<Option<Vec<MemoVersionEntry>>>,
+    on_changed: Callback<()>,
+) -> impl IntoView {
     let memo_id = StoredValue::new(memo.id.clone());
     let case_sv = StoredValue::new(memo.case_id.clone());
     let title = RwSignal::new(memo.title.clone());
@@ -104,6 +109,7 @@ pub(super) fn MemoEditor(memo: LegalMemo, on_changed: Callback<()>) -> impl Into
     let attorneys_error = RwSignal::new(String::new());
     let stale_attorney = RwSignal::new(String::new());
     let sending = RwSignal::new(false);
+    let sent = RwSignal::new(false);
     let problems = RwSignal::new(Vec::<MemoProblem>::new());
     let message = RwSignal::new(String::new());
     let deleting = RwSignal::new(false);
@@ -139,7 +145,10 @@ pub(super) fn MemoEditor(memo: LegalMemo, on_changed: Callback<()>) -> impl Into
     let touch = Callback::new(move |_: ()| {
         if !problems.with_untracked(Vec::is_empty) {
             let a = attorney.get_untracked();
-            problems.set(content.with_untracked(|c| problems_before_review(&a, c)));
+            let found = content.with_untracked(|c| problems_before_review(&a, c));
+            if problems.with_untracked(|p| *p != found) {
+                problems.set(found);
+            }
         }
         autosave.changed();
     });
@@ -217,6 +226,7 @@ pub(super) fn MemoEditor(memo: LegalMemo, on_changed: Callback<()>) -> impl Into
             match send_legal_memo_for_review(id, t, a, c, r).await {
                 Ok(()) => {
                     autosave.saved_through(snapshot);
+                    let _ = sent.try_set(true);
                     let _ = on_changed.try_run(());
                 }
                 Err(e) => {
@@ -284,7 +294,7 @@ pub(super) fn MemoEditor(memo: LegalMemo, on_changed: Callback<()>) -> impl Into
                 "Save draft"
             </button>
             <button type="button" class=BTN_PRIMARY on:click=send prop:disabled=move || sending.get() || autosave.saving.get() || deleting.get()>
-                {move || if sending.get() { "Sending\u{2026}" } else { "Send for attorney review" }}
+                {move || if sent.get() { "Sent" } else if sending.get() { "Sending\u{2026}" } else { "Send for attorney review" }}
                 {icon(Icon::ArrowRight, "h-4 w-4 flex-none")}
             </button>
         }
@@ -660,6 +670,11 @@ pub(super) fn MemoEditor(memo: LegalMemo, on_changed: Callback<()>) -> impl Into
                     {actions(false)}
                 </div>
             </fieldset>
+            <Show when=move || versions.with(|v| v.as_ref().is_none_or(|v| !v.is_empty()))>
+                <div class="lg:col-start-2">
+                    <HistoryCard versions=versions opening=RwSignal::new(false) />
+                </div>
+            </Show>
         </div>
     }
 }

@@ -24,6 +24,7 @@ struct Locked {
 
 pub struct ApprovedSnapshot {
     pub case_id: String,
+    pub docket: String,
     pub title: String,
     pub content: LegalMemoContent,
     pub review: MemoReview,
@@ -31,6 +32,7 @@ pub struct ApprovedSnapshot {
     pub attorney_name: String,
     pub approved_by_name: String,
     pub approved_at: String,
+    pub approval_comment: String,
 }
 
 fn parse_review(raw: &str) -> Result<MemoReview, sqlx::Error> {
@@ -115,6 +117,8 @@ struct MemoRow {
     revision: String,
 }
 
+const FILING_WINDOW: chrono::TimeDelta = chrono::TimeDelta::minutes(2);
+
 pub async fn get(memo_id: &str) -> Result<Option<LegalMemo>, sqlx::Error> {
     let row = sqlx::query_as::<_, MemoRow>(
         "SELECT m.id, m.case_id, c.name AS case_name,
@@ -154,12 +158,16 @@ pub async fn get(memo_id: &str) -> Result<Option<LegalMemo>, sqlx::Error> {
         content: parse_content(&r.content)?,
         review: parse_review(&r.review)?,
         approved_by_name: r.approved_by_name,
+        filing_may_be_running: r
+            .approved_at
+            .is_some_and(|at| chrono::Utc::now() - at < FILING_WINDOW),
         approved_at: r.approved_at.map(local_stamp).unwrap_or_default(),
         revision: r.revision,
         can_edit: false,
         can_review: false,
         can_withdraw: false,
         can_start_new: false,
+        can_file: false,
     }))
 }
 
@@ -445,6 +453,7 @@ pub async fn set_review_check(
     if checked {
         locked.review.marks.push(ReviewMark {
             check,
+            by_user_id: actor_id.to_string(),
             by_name: actor.to_string(),
             at: crate::server::db::now_stamp(),
         });
@@ -495,6 +504,32 @@ pub async fn start_new_version(
     )
     .bind(memo_id)
     .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE legal_memos
+         SET content = jsonb_set(content, '{memo_date}', to_jsonb(''::text))
+         WHERE id = $1",
+    )
+    .bind(memo_id)
+    .execute(&mut *tx)
+    .await?;
+    let content: String = sqlx::query_scalar("SELECT content::text FROM legal_memos WHERE id = $1")
+        .bind(memo_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    add_version(
+        &mut tx,
+        memo_id,
+        locked.version + 1,
+        VersionEvent::Started,
+        &locked.title,
+        &content,
+        "{}",
+        &locked.attorney_name,
+        actor_id,
+        actor,
+        "",
+    )
     .await?;
     record(
         &mut tx,
@@ -593,22 +628,29 @@ pub async fn approved_snapshot(
     #[derive(sqlx::FromRow)]
     struct Row {
         case_id: String,
+        docket: String,
         title: String,
         content: String,
         review: String,
         author_name: String,
         attorney_name: String,
         actor_name: String,
+        comment: String,
         created_at: chrono::DateTime<chrono::Utc>,
     }
     let row = sqlx::query_as::<_, Row>(
-        "SELECT m.case_id, v.title, v.content::text AS content, v.review::text AS review,
-                m.author_name, v.attorney_name, v.actor_name, v.created_at
+        "SELECT m.case_id,
+                COALESCE((SELECT btrim(p.value) FROM case_properties p
+                          WHERE p.case_id = m.case_id AND p.key = ANY($3) AND btrim(p.value) <> ''
+                          ORDER BY array_position($3, p.key), p.ord LIMIT 1), '') AS docket,
+                v.title, v.content::text AS content, v.review::text AS review,
+                m.author_name, v.attorney_name, v.actor_name, v.comment, v.created_at
          FROM legal_memo_versions v JOIN legal_memos m ON m.id = v.memo_id
          WHERE v.memo_id = $1 AND v.version = $2 AND v.event = 'approved'",
     )
     .bind(memo_id)
     .bind(version)
+    .bind(&DOCKET_KEYS[..])
     .fetch_optional(pool())
     .await?;
     let Some(r) = row else {
@@ -616,6 +658,7 @@ pub async fn approved_snapshot(
     };
     Ok(Some(ApprovedSnapshot {
         case_id: r.case_id,
+        docket: r.docket,
         title: r.title,
         content: parse_content(&r.content)?,
         review: parse_review(&r.review)?,
@@ -623,6 +666,7 @@ pub async fn approved_snapshot(
         attorney_name: r.attorney_name,
         approved_by_name: r.actor_name,
         approved_at: local_stamp(r.created_at),
+        approval_comment: r.comment,
     }))
 }
 

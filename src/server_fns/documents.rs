@@ -338,7 +338,7 @@ pub async fn upload_case_document(data: MultipartData) -> Result<String, ServerF
         .join("/");
     if crate::server::db::case_record_files::is_filed_path(&case_id, &target)
         .await
-        .map_err(ServerFnError::new)?
+        .map_err(filed_check_error)?
     {
         return Err(ServerFnError::new(
             "A filed case record already has this name. Rename your file and upload it again.",
@@ -433,13 +433,15 @@ pub async fn delete_case_document(case_id: String, path: String) -> Result<(), S
         ));
     };
     let standing_child = segments.len() == 2
-        && crate::helpers::new_case_folders::NEW_CASE_FOLDERS.iter().any(|folder| {
-            folder.name.eq_ignore_ascii_case(&segments[0])
-                && folder
-                    .children
-                    .iter()
-                    .any(|child| child.eq_ignore_ascii_case(&segments[1]))
-        });
+        && crate::helpers::new_case_folders::NEW_CASE_FOLDERS
+            .iter()
+            .any(|folder| {
+                folder.name.eq_ignore_ascii_case(&segments[0])
+                    && folder
+                        .children
+                        .iter()
+                        .any(|child| child.eq_ignore_ascii_case(&segments[1]))
+            });
     if (segments.len() == 1 && sharepoint::visibility_of(&segments).is_some()) || standing_child {
         return Err(ServerFnError::new(
             "The standing folders are part of every case and cannot be deleted.",
@@ -454,7 +456,7 @@ pub async fn delete_case_document(case_id: String, path: String) -> Result<(), S
         && segments[0].eq_ignore_ascii_case(sharepoint::CASE_NOTES_FOLDER)
         && crate::server::db::case_note_documents::is_filed_record(&case_id, &name)
             .await
-            .map_err(ServerFnError::new)?
+            .map_err(filed_check_error)?
     {
         return Err(ServerFnError::new(
             "This is a case note's filed record and cannot be deleted. \
@@ -464,7 +466,7 @@ pub async fn delete_case_document(case_id: String, path: String) -> Result<(), S
 
     if crate::server::db::case_record_files::is_filed_path(&case_id, &segments.join("/"))
         .await
-        .map_err(ServerFnError::new)?
+        .map_err(filed_check_error)?
     {
         return Err(ServerFnError::new(
             "This holds a filed case record and cannot be deleted.",
@@ -769,3 +771,9 @@ mod download {
 
 #[cfg(feature = "ssr")]
 pub use download::install;
+
+#[cfg(feature = "ssr")]
+fn filed_check_error(error: sqlx::Error) -> ServerFnError {
+    tracing::warn!("filed record check failed: {error}");
+    ServerFnError::new("Couldn't check this folder's filed records. Try again.")
+}

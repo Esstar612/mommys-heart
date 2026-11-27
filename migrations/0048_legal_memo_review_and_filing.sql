@@ -6,6 +6,12 @@ ALTER TABLE legal_memo_versions
     ADD COLUMN review JSONB NOT NULL DEFAULT '{}'::jsonb,
     ADD CONSTRAINT legal_memo_versions_review_check CHECK (jsonb_typeof(review) = 'object');
 
+ALTER TABLE legal_memo_versions
+    DROP CONSTRAINT legal_memo_versions_event_check,
+    ADD CONSTRAINT legal_memo_versions_event_check CHECK (event IN (
+        'sent', 'revisions_requested', 'approved', 'withdrawn', 'started'
+    ));
+
 CREATE OR REPLACE FUNCTION prevent_approved_legal_memo_update() RETURNS trigger AS $$
 BEGIN
     IF OLD.status = 'approved'
@@ -34,7 +40,6 @@ CREATE TABLE case_record_files (
     case_id       TEXT NOT NULL REFERENCES cases(id) ON DELETE RESTRICT,
     relative_path TEXT NOT NULL,
     file_name     TEXT NOT NULL,
-    web_url       TEXT NOT NULL DEFAULT '',
     filed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (kind, record_id, version),
     CONSTRAINT case_record_files_kind_check CHECK (kind IN ('legal_memo'))

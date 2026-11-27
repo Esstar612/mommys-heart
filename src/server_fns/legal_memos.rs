@@ -16,6 +16,7 @@ coded_enum!(VersionEvent {
     RevisionsRequested => ("revisions_requested", "Revisions requested"),
     Approved => ("approved", "Approved"),
     Withdrawn => ("withdrawn", "Withdrawn from review"),
+    Started => ("started", "Started a new version"),
 });
 
 coded_enum!(FactSource {
@@ -127,6 +128,60 @@ pub struct NextStep {
     pub timing: String,
 }
 
+impl MemoFact {
+    pub fn is_blank(&self) -> bool {
+        self.text.trim().is_empty()
+    }
+}
+
+impl ProcedureEvent {
+    pub fn is_blank(&self) -> bool {
+        [&self.date, &self.event, &self.source]
+            .iter()
+            .all(|v| v.trim().is_empty())
+    }
+}
+
+impl EvidenceItem {
+    pub fn is_blank(&self) -> bool {
+        [
+            &self.item,
+            &self.source,
+            &self.date_received,
+            &self.follow_up,
+        ]
+        .iter()
+        .all(|v| v.trim().is_empty())
+    }
+}
+
+impl Authority {
+    pub fn is_blank(&self) -> bool {
+        [
+            &self.citation,
+            &self.court_level,
+            &self.link,
+            &self.date_checked,
+        ]
+        .iter()
+        .all(|v| v.trim().is_empty())
+    }
+}
+
+impl AnalysisSection {
+    pub fn is_blank(&self) -> bool {
+        self.heading.trim().is_empty() && self.body.trim().is_empty()
+    }
+}
+
+impl NextStep {
+    pub fn is_blank(&self) -> bool {
+        [&self.action, &self.owner, &self.timing]
+            .iter()
+            .all(|v| v.trim().is_empty())
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LegalMemoContent {
@@ -148,6 +203,8 @@ pub struct LegalMemoContent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReviewMark {
     pub check: ReviewCheck,
+    #[serde(default)]
+    pub by_user_id: String,
     pub by_name: String,
     pub at: String,
 }
@@ -206,6 +263,8 @@ pub struct LegalMemo {
     pub can_review: bool,
     pub can_withdraw: bool,
     pub can_start_new: bool,
+    pub can_file: bool,
+    pub filing_may_be_running: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -265,6 +324,8 @@ pub const SECTION_SAFETY: &str = "Safety";
 pub const SECTION_QUESTIONS: &str = "1 Questions presented";
 pub const SECTION_BRIEF: &str = "2 Brief answer";
 pub const SECTION_FACTS: &str = "3 Relevant facts";
+pub const SECTION_PROCEDURE: &str = "4 Procedural history";
+pub const SECTION_EVIDENCE: &str = "5 Evidence log";
 
 pub fn validate_draft(title: &str, content: &LegalMemoContent) -> Result<(), String> {
     if title.trim().is_empty() {
@@ -302,18 +363,12 @@ pub fn validate_draft(title: &str, content: &LegalMemoContent) -> Result<(), Str
         short(&p.date, "event date")?;
         long(&p.event, "event")?;
         short(&p.source, "event source")?;
-        if p.status == EventStatus::Confirmed && p.source.trim().is_empty() {
-            return Err("An event can't be Confirmed without a source document.".to_string());
-        }
     }
     for e in &content.evidence {
         long(&e.item, "evidence item")?;
         short(&e.source, "evidence source")?;
         date(&e.date_received, "date received")?;
         long(&e.follow_up, "follow-up")?;
-        if e.status == EvidenceStatus::Reviewed && e.date_received.is_empty() {
-            return Err("Evidence can't be Reviewed before it has a date received.".to_string());
-        }
     }
     for a in &content.authorities {
         long(&a.citation, "citation")?;
@@ -389,6 +444,36 @@ pub fn problems_before_review(attorney_id: &str, content: &LegalMemoContent) -> 
             format!("\"{}\" needs a source.", excerpt(&fact.text)),
         );
     }
+    for p in content.procedure.iter().filter(|p| {
+        !p.is_blank() && p.status == EventStatus::Confirmed && p.source.trim().is_empty()
+    }) {
+        push(
+            SECTION_PROCEDURE,
+            format!(
+                "\"{}\" can't be Confirmed without a source document.",
+                excerpt(if p.event.trim().is_empty() {
+                    &p.date
+                } else {
+                    &p.event
+                })
+            ),
+        );
+    }
+    for e in content.evidence.iter().filter(|e| {
+        !e.is_blank() && e.status == EvidenceStatus::Reviewed && e.date_received.is_empty()
+    }) {
+        push(
+            SECTION_EVIDENCE,
+            format!(
+                "\"{}\" can't be Reviewed before it has a date received.",
+                excerpt(if e.item.trim().is_empty() {
+                    &e.source
+                } else {
+                    &e.item
+                })
+            ),
+        );
+    }
     out
 }
 
@@ -460,6 +545,7 @@ pub async fn load_legal_memo(memo_id: String) -> Result<LegalMemo, ServerFnError
         && memo.author_id == user.id
         && memo.status == MemoStatus::Approved
         && can_add_notes(&user, &case_id).await;
+    memo.can_file = memo.status == MemoStatus::Approved && can_add_notes(&user, &case_id).await;
     Ok(memo)
 }
 
@@ -511,7 +597,7 @@ pub async fn save_legal_memo_draft(
 
     let user = require_user().await?;
     let case_id = authorize_memo_author(&user, &memo_id).await?;
-    let (title, attorney) = clean_header(&case_id, &title, &attorney_id, &user.id).await?;
+    let (title, attorney) = clean_header(&case_id, &title, &attorney_id, &user.id, false).await?;
     validate_draft(&title, &content).map_err(ServerFnError::new)?;
     legal_memos::save_draft(
         &memo_id,
@@ -538,7 +624,7 @@ pub async fn send_legal_memo_for_review(
 
     let user = require_user().await?;
     let case_id = authorize_memo_author(&user, &memo_id).await?;
-    let (title, attorney) = clean_header(&case_id, &title, &attorney_id, &user.id).await?;
+    let (title, attorney) = clean_header(&case_id, &title, &attorney_id, &user.id, true).await?;
     validate_draft(&title, &content).map_err(ServerFnError::new)?;
     let problems = problems_before_review(&attorney_id, &content);
     if !problems.is_empty() {
@@ -683,22 +769,30 @@ pub async fn load_legal_memo_version(
 pub async fn legal_memo_document(
     memo_id: String,
 ) -> Result<Option<MemoFiledDocument>, ServerFnError> {
-    use crate::server::db::case_record_files;
+    use crate::server::db::{case_record_files, legal_memos};
     use crate::server::permissions::require_user;
 
     let user = require_user().await?;
     authorize_memo_read(&user, &memo_id).await?;
-    Ok(
-        case_record_files::latest(crate::server::case_records::legal_memo::KIND, &memo_id)
-            .await
-            .map_err(memo_error)?
-            .map(|filed| MemoFiledDocument {
-                version: filed.version,
-                file_name: filed.file_name,
-                relative_path: filed.relative_path,
-                filed_at: filed.filed_at,
-            }),
+    let Some(version) = legal_memos::latest_approved_version(&memo_id)
+        .await
+        .map_err(memo_error)?
+    else {
+        return Ok(None);
+    };
+    Ok(case_record_files::find(
+        crate::server::case_records::legal_memo::KIND,
+        &memo_id,
+        version,
     )
+    .await
+    .map_err(memo_error)?
+    .map(|filed| MemoFiledDocument {
+        version: filed.version,
+        file_name: filed.file_name,
+        relative_path: filed.relative_path,
+        filed_at: filed.filed_at,
+    }))
 }
 
 #[server(prefix = "/api")]
@@ -823,6 +917,7 @@ async fn clean_header(
     title: &str,
     attorney_id: &str,
     author_id: &str,
+    sending: bool,
 ) -> Result<(String, Option<MemoAttorney>), ServerFnError> {
     use crate::server::db::legal_memos;
     use crate::server_fns::crm::clean_text;
@@ -841,9 +936,11 @@ async fn clean_header(
         .await
         .map_err(memo_error)?
         .into_iter()
-        .find(|a| a.id == attorney_id)
-        .ok_or_else(|| ServerFnError::new("Choose a reviewer who is on this case."))?;
-    Ok((title, Some(attorney)))
+        .find(|a| a.id == attorney_id);
+    if sending && attorney.is_none() {
+        return Err(ServerFnError::new("Choose a reviewer who is on this case."));
+    }
+    Ok((title, attorney))
 }
 
 #[cfg(feature = "ssr")]
@@ -854,5 +951,28 @@ fn memo_error(error: sqlx::Error) -> ServerFnError {
             tracing::warn!("legal memo request failed: {other}");
             ServerFnError::new("Something went wrong with the legal memo. Try again.")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_stored_as_slug<T>(all: &[T], slug: fn(T) -> &'static str)
+    where
+        T: Copy + PartialEq + std::fmt::Debug + Serialize + for<'de> Deserialize<'de>,
+    {
+        for v in all {
+            assert_eq!(serde_json::to_value(v).unwrap(), slug(*v), "{v:?}");
+            assert_eq!(serde_json::from_value::<T>(slug(*v).into()).unwrap(), *v);
+        }
+    }
+
+    #[test]
+    fn stored_values_match_slugs() {
+        assert_stored_as_slug(FactSource::ALL, FactSource::slug);
+        assert_stored_as_slug(EventStatus::ALL, EventStatus::slug);
+        assert_stored_as_slug(EvidenceStatus::ALL, EvidenceStatus::slug);
+        assert_stored_as_slug(ReviewCheck::ALL, ReviewCheck::slug);
     }
 }

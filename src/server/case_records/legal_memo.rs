@@ -1,3 +1,4 @@
+use crate::helpers::format::{date_long, matter_label};
 use crate::server::db::{case_record_files, cases, legal_memos};
 use crate::server::docx::{placeholder, Block};
 use crate::server_fns::legal_memos::{LegalMemoContent, MemoLine, ReviewCheck, MEMO_FOLDER};
@@ -41,7 +42,7 @@ pub async fn file_memo(memo_id: &str, version: i32) -> Result<(), FileError> {
     let bytes = crate::server::docx::render(&memo_blocks(&snapshot, &case_name, version))
         .map_err(FileError::Record)?;
     let file_name = memo_file_name(memo_id, &snapshot.title, version);
-    let web_url = file_case_document(&snapshot.case_id, &MEMO_FOLDER, &file_name, bytes)
+    file_case_document(&snapshot.case_id, &MEMO_FOLDER, &file_name, bytes)
         .await
         .map_err(FileError::Store)?;
     let relative_path = format!("{}/{file_name}", MEMO_FOLDER.join("/"));
@@ -52,7 +53,6 @@ pub async fn file_memo(memo_id: &str, version: i32) -> Result<(), FileError> {
         &snapshot.case_id,
         &relative_path,
         &file_name,
-        &web_url,
     )
     .await
     .map_err(db)?;
@@ -111,13 +111,14 @@ fn memo_blocks(memo: &legal_memos::ApprovedSnapshot, case_name: &str, version: i
         Block::Spacer,
         Block::Field("To".into(), placeholder(&memo.attorney_name)),
         Block::Field("From".into(), placeholder(&memo.author_name)),
-        Block::Field("Date".into(), placeholder(&c.memo_date)),
-        Block::Field("Matter".into(), case_name.to_string()),
+        Block::Field("Date".into(), placeholder(&date_long(&c.memo_date))),
+        Block::Field("Matter".into(), matter_label(case_name, &memo.docket)),
         Block::Field(
             "Status".into(),
             format!(
                 "Approved by {} on {}, version {version}",
-                memo.approved_by_name, memo.approved_at
+                memo.approved_by_name,
+                date_long(&memo.approved_at)
             ),
         ),
         Block::Field(
@@ -125,7 +126,7 @@ fn memo_blocks(memo: &legal_memos::ApprovedSnapshot, case_name: &str, version: i
             match c.safety_flagged {
                 Some(true) => format!(
                     "Yes. Escalated on {} to {}.",
-                    placeholder(&c.safety_escalated_on),
+                    placeholder(&date_long(&c.safety_escalated_on)),
                     placeholder(&c.safety_escalated_to)
                 ),
                 Some(false) => "No".into(),
@@ -133,6 +134,12 @@ fn memo_blocks(memo: &legal_memos::ApprovedSnapshot, case_name: &str, version: i
             },
         ),
     ];
+    if !memo.approval_comment.trim().is_empty() {
+        out.push(Block::Field(
+            "Approval comment".into(),
+            memo.approval_comment.clone(),
+        ));
+    }
 
     heading(&mut out, "1. Questions presented");
     numbered(&mut out, &c.questions);
@@ -141,7 +148,7 @@ fn memo_blocks(memo: &legal_memos::ApprovedSnapshot, case_name: &str, version: i
     heading(&mut out, "3. Relevant facts");
     lines(
         &mut out,
-        c.facts.iter().map(|f| {
+        c.facts.iter().filter(|f| !f.is_blank()).map(|f| {
             format!(
                 "{} ({})",
                 f.text,
@@ -152,7 +159,7 @@ fn memo_blocks(memo: &legal_memos::ApprovedSnapshot, case_name: &str, version: i
     heading(&mut out, "4. Procedural history");
     lines(
         &mut out,
-        c.procedure.iter().map(|p| {
+        c.procedure.iter().filter(|p| !p.is_blank()).map(|p| {
             format!(
                 "{}: {}. Source: {}. {}",
                 placeholder(&p.date),
@@ -165,7 +172,7 @@ fn memo_blocks(memo: &legal_memos::ApprovedSnapshot, case_name: &str, version: i
     heading(&mut out, "5. Evidence log");
     lines(
         &mut out,
-        c.evidence.iter().map(|e| {
+        c.evidence.iter().filter(|e| !e.is_blank()).map(|e| {
             format!(
                 "{}. Source: {}. {}{}. Follow-up: {}",
                 e.item,
@@ -174,7 +181,7 @@ fn memo_blocks(memo: &legal_memos::ApprovedSnapshot, case_name: &str, version: i
                 if e.date_received.is_empty() {
                     String::new()
                 } else {
-                    format!(" (received {})", e.date_received)
+                    format!(" (received {})", date_long(&e.date_received))
                 },
                 placeholder(&e.follow_up)
             )
@@ -183,13 +190,13 @@ fn memo_blocks(memo: &legal_memos::ApprovedSnapshot, case_name: &str, version: i
     heading(&mut out, "6. Authorities");
     lines(
         &mut out,
-        c.authorities.iter().map(|a| {
+        c.authorities.iter().filter(|a| !a.is_blank()).map(|a| {
             format!(
                 "{}. {}. {}. Checked {}. Subsequent treatment {}.",
                 a.citation,
                 placeholder(&a.court_level),
                 placeholder(&a.link),
-                placeholder(&a.date_checked),
+                placeholder(&date_long(&a.date_checked)),
                 if a.treatment_checked {
                     "checked"
                 } else {
@@ -199,15 +206,25 @@ fn memo_blocks(memo: &legal_memos::ApprovedSnapshot, case_name: &str, version: i
         }),
     );
     heading(&mut out, "7. Analysis");
-    for a in &c.analysis {
-        out.push(Block::Field(a.heading.clone(), placeholder(&a.body)));
+    for a in c.analysis.iter().filter(|a| !a.is_blank()) {
+        out.push(if a.heading.trim().is_empty() {
+            Block::Body(a.body.clone())
+        } else {
+            Block::Field(a.heading.clone(), placeholder(&a.body))
+        });
     }
     heading(&mut out, "8. Outstanding questions");
-    numbered(&mut out, &c.outstanding);
+    lines(
+        &mut out,
+        c.outstanding
+            .iter()
+            .filter(|q| !q.text.trim().is_empty())
+            .map(|q| format!("\u{2022} {}", q.text)),
+    );
     heading(&mut out, "9. Proposed next steps");
     lines(
         &mut out,
-        c.next_steps.iter().map(|n| {
+        c.next_steps.iter().filter(|n| !n.is_blank()).map(|n| {
             format!(
                 "{}. Proposed owner: {}. Timing: {}",
                 n.action,
@@ -225,7 +242,7 @@ fn memo_blocks(memo: &legal_memos::ApprovedSnapshot, case_name: &str, version: i
                     "{}: checked by {} on {}",
                     check.label(),
                     mark.by_name,
-                    mark.at
+                    date_long(&mark.at)
                 ),
                 None => format!("{}: not checked", check.label()),
             }

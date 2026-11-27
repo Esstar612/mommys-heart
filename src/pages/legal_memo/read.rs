@@ -121,7 +121,7 @@ pub(super) fn content_cards(c: &LegalMemoContent, author: &str) -> AnyView {
     let parts: Vec<(String, String)> = c
         .analysis
         .iter()
-        .filter(|a| !a.heading.trim().is_empty() || !a.body.trim().is_empty())
+        .filter(|a| !a.is_blank())
         .map(|a| (a.heading.clone(), a.body.clone()))
         .collect();
     let analysis = if parts.is_empty() {

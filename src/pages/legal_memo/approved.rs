@@ -29,13 +29,13 @@ pub(super) struct Filed {
 }
 
 impl Filed {
-    pub fn new(memo_id: String) -> Self {
+    pub fn new(memo_id: String, may_be_running: bool) -> Self {
         Self {
             memo_sv: StoredValue::new(memo_id),
             document: RwSignal::new(None),
             loading: RwSignal::new(true),
             error: RwSignal::new(String::new()),
-            attempts: RwSignal::new(0),
+            attempts: RwSignal::new(if may_be_running { 0 } else { FILING_CHECKS }),
         }
     }
 
@@ -45,22 +45,25 @@ impl Filed {
         };
         spawn_local(async move {
             let result = legal_memo_document(id).await;
-            let _ = self.loading.try_set(false);
             match result {
                 Ok(None) => {
                     let tries = self.attempts.try_get_untracked().unwrap_or(FILING_CHECKS);
                     if tries < FILING_CHECKS {
                         let _ = self.attempts.try_set(tries + 1);
                         set_timeout(move || self.fetch(), FILING_CHECK_DELAY);
+                        return;
                     }
+                    let _ = self.error.try_set(String::new());
                 }
                 Ok(found) => {
+                    let _ = self.error.try_set(String::new());
                     let _ = self.document.try_set(found);
                 }
                 Err(e) => {
                     let _ = self.error.try_set(err_text(e));
                 }
             }
+            let _ = self.loading.try_set(false);
         });
     }
 
@@ -117,6 +120,7 @@ pub(super) fn LockedCard(memo: LegalMemo, filed: Filed, on_changed: Callback<()>
         });
     };
     let can_start_new = memo.can_start_new;
+    let can_file = memo.can_file;
 
     view! {
         <section class=format!("{CARD} px-5 pt-[18px] pb-[18px]") aria-labelledby="locked-h">
@@ -138,10 +142,12 @@ pub(super) fn LockedCard(memo: LegalMemo, filed: Filed, on_changed: Callback<()>
                     .into_any();
                 }
                 view! {
-                    <p class="mt-3 text-[13.5px]">"Not saved to SharePoint yet. Saving retries if SharePoint was unavailable."</p>
-                    <button type="button" class=format!("{BTN_SM} mt-2") on:click=file_now prop:disabled=move || filing.get()>
-                        {move || if filing.get() { "Saving\u{2026}" } else { "Save it now" }}
-                    </button>
+                    <p class="mt-3 text-[13.5px]">"Not saved to SharePoint yet."</p>
+                    {can_file.then(|| view! {
+                        <button type="button" class=format!("{BTN_SM} mt-2") on:click=file_now prop:disabled=move || filing.get()>
+                            {move || if filing.get() { "Saving\u{2026}" } else { "Save it now" }}
+                        </button>
+                    })}
                 }
                 .into_any()
             }}
@@ -162,11 +168,14 @@ pub(super) fn LockedCard(memo: LegalMemo, filed: Filed, on_changed: Callback<()>
 }
 
 #[component]
-pub(super) fn ChecksCard(review: MemoReview) -> impl IntoView {
+pub(super) fn ChecksCard(
+    review: MemoReview,
+    #[prop(default = "checks-h")] heading_id: &'static str,
+) -> impl IntoView {
     view! {
-        <section class=format!("{CARD} px-5 pt-[18px] pb-3.5") aria-labelledby="checks-h">
+        <section class=format!("{CARD} px-5 pt-[18px] pb-3.5") aria-labelledby=heading_id>
             <div class=SIDE_HEAD>
-                <h2 id="checks-h" class=SIDE_H2>"Review checks"</h2>
+                <h2 id=heading_id class=SIDE_H2>"Review checks"</h2>
             </div>
             <ul class="mt-1">
                 {ReviewCheck::ALL
@@ -199,12 +208,15 @@ pub(super) fn ChecksCard(review: MemoReview) -> impl IntoView {
 
 #[component]
 pub(super) fn HistoryCard(
-    versions: RwSignal<Vec<MemoVersionEntry>>,
+    versions: RwSignal<Option<Vec<MemoVersionEntry>>>,
     opening: RwSignal<bool>,
-    on_view: Callback<String>,
+    #[prop(optional)] on_view: Option<Callback<String>>,
 ) -> impl IntoView {
     let rows = move || {
-        let entries = versions.get();
+        let Some(entries) = versions.get() else {
+            return view! { <li class=ROWLINE><span class=ERRTEXT role="alert">"Couldn't load the version history. Reload the page to try again."</span></li> }
+                .into_any();
+        };
         if entries.is_empty() {
             return view! { <li class=ROWLINE><span class=HINT>"Not sent yet."</span></li> }
                 .into_any();
@@ -215,7 +227,7 @@ pub(super) fn HistoryCard(
                 let tone = match e.event {
                     VersionEvent::Approved => Tone::Green,
                     VersionEvent::RevisionsRequested => Tone::Red,
-                    VersionEvent::Withdrawn => Tone::Sand,
+                    VersionEvent::Withdrawn | VersionEvent::Started => Tone::Sand,
                     VersionEvent::Sent => Tone::Yellow,
                 };
                 let id = e.id.clone();
@@ -229,7 +241,9 @@ pub(super) fn HistoryCard(
                                 <span class="mt-1 block whitespace-pre-line text-[13.5px]">{e.comment.clone()}</span>
                             })}
                         </span>
-                        <button type="button" class=format!("{LINK} text-[13.5px]") prop:disabled=move || opening.get() on:click=move |_| on_view.run(id.clone())>"View"</button>
+                        {on_view.map(|on_view| view! {
+                            <button type="button" class=format!("{LINK} text-[13.5px]") prop:disabled=move || opening.get() on:click=move |_| on_view.run(id.clone())>"View"</button>
+                        })}
                     </li>
                 }
             })

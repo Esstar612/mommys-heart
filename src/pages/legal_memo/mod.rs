@@ -17,14 +17,15 @@ use crate::components::design::{
 };
 use crate::components::guard::require_login;
 use crate::components::layout::Layout;
-use crate::components::legal_memos::{matter_label, memo_status_tone, ERRTEXT};
+use crate::components::legal_memos::{memo_status_tone, ERRTEXT};
 use crate::components::loading::Loading;
-use crate::helpers::format::date_parts;
+pub(super) use crate::helpers::format::date_long;
+use crate::helpers::format::{date_parts, matter_label};
 use crate::server_fns::err_text;
 use crate::server_fns::legal_memos::{
     legal_memo_versions, load_legal_memo, load_legal_memo_version, LegalMemo, MemoStatus,
-    MemoVersionEntry, MemoVersionSnapshot, VersionEvent, SECTION_BRIEF, SECTION_FACTS,
-    SECTION_HEADER, SECTION_QUESTIONS, SECTION_SAFETY,
+    MemoVersionEntry, MemoVersionSnapshot, VersionEvent, SECTION_BRIEF, SECTION_EVIDENCE,
+    SECTION_FACTS, SECTION_HEADER, SECTION_PROCEDURE, SECTION_QUESTIONS, SECTION_SAFETY,
 };
 use crate::state::AppState;
 
@@ -69,8 +70,14 @@ pub(super) const SECTIONS: &[Section] = &[
     ),
     section("s2", Some("2"), "Brief answer", true, SECTION_BRIEF),
     section("s3", Some("3"), "Relevant facts", true, SECTION_FACTS),
-    section("s4", Some("4"), "Procedural history", false, ""),
-    section("s5", Some("5"), "Evidence log", false, ""),
+    section(
+        "s4",
+        Some("4"),
+        "Procedural history",
+        false,
+        SECTION_PROCEDURE,
+    ),
+    section("s5", Some("5"), "Evidence log", false, SECTION_EVIDENCE),
     section("s6", Some("6"), "Authorities", false, ""),
     section("s7", Some("7"), "Analysis", false, ""),
     section("s8", Some("8"), "Outstanding questions", false, ""),
@@ -98,12 +105,6 @@ pub(super) fn section_card(anchor: &str, error: Signal<bool>, body: AnyView) -> 
         }
         .into_any(),
     }
-}
-
-pub(super) fn date_long(stamp: &str) -> String {
-    date_parts(stamp)
-        .map(|(m, d, y)| format!("{m} {d}, {y}"))
-        .unwrap_or_else(|| stamp.to_string())
 }
 
 pub(super) fn clock(hhmm: &str) -> Option<String> {
@@ -151,7 +152,7 @@ pub fn LegalMemoPage() -> impl IntoView {
     let state = expect_context::<AppState>();
     let params = use_params_map();
     let memo = RwSignal::new(None::<LegalMemo>);
-    let versions = RwSignal::new(Vec::<MemoVersionEntry>::new());
+    let versions = RwSignal::new(Some(Vec::<MemoVersionEntry>::new()));
     let loading = RwSignal::new(true);
     let load_error = RwSignal::new(String::new());
     let reload = RwSignal::new(0u32);
@@ -172,7 +173,7 @@ pub fn LegalMemoPage() -> impl IntoView {
         let mine = generation.get_untracked();
         spawn_local(async move {
             let result = load_legal_memo(memo_id.clone()).await;
-            let history = legal_memo_versions(memo_id).await.unwrap_or_default();
+            let history = legal_memo_versions(memo_id).await.ok();
             if generation.try_get_untracked() != Some(mine) {
                 return;
             }
@@ -208,7 +209,7 @@ pub fn LegalMemoPage() -> impl IntoView {
                     {move || {
                         if let Some(found) = current.get() {
                             return if found.can_edit {
-                                view! { <MemoEditor memo=found on_changed=on_changed /> }.into_any()
+                                view! { <MemoEditor memo=found versions=versions on_changed=on_changed /> }.into_any()
                             } else {
                                 view! { <MemoView memo=found versions=versions on_changed=on_changed /> }.into_any()
                             };
@@ -228,7 +229,7 @@ pub fn LegalMemoPage() -> impl IntoView {
 #[component]
 fn MemoView(
     memo: LegalMemo,
-    versions: RwSignal<Vec<MemoVersionEntry>>,
+    versions: RwSignal<Option<Vec<MemoVersionEntry>>>,
     on_changed: Callback<()>,
 ) -> impl IntoView {
     let approved = memo.status == MemoStatus::Approved;
@@ -237,7 +238,7 @@ fn MemoView(
     let viewing = RwSignal::new(None::<MemoVersionSnapshot>);
     let opening = RwSignal::new(false);
     let view_error = RwSignal::new(String::new());
-    let filed = Filed::new(memo.id.clone());
+    let filed = Filed::new(memo.id.clone(), memo.filing_may_be_running);
     if approved {
         filed.fetch();
     }
@@ -263,7 +264,7 @@ fn MemoView(
         });
     });
 
-    let pills = if approved {
+    let current_pills = if approved {
         let line = format!(
             "Approved by {}, {}",
             memo.approved_by_name,
@@ -278,14 +279,28 @@ fn MemoView(
     } else {
         view! { {status_pill(&memo)} <VolunteersOnlyBadge /> }.into_any()
     };
+    let current_shown = move || viewing.with(Option::is_none);
+    let pills = view! {
+        <span class="contents" class:hidden=move || !current_shown()>{current_pills}</span>
+        {move || viewing.with(|v| v.as_ref().map(|snap| view! {
+            <StatusPill label=format!("Version {}", snap.version) tone=Tone::Sand />
+            <VolunteersOnlyBadge />
+        }))}
+    };
     let sent_line = (memo.status == MemoStatus::InReview)
-        .then(|| memo.last_sent.as_ref())
+        .then_some(memo.last_sent.as_ref())
         .flatten()
         .map(|e| format!("Sent by {}, {}", e.actor_name, when(&e.at)));
-    let banner = if approved {
-        "Approved for internal use. Not for client distribution."
-    } else {
-        "Draft for attorney review. Not for client distribution."
+    let banner = move || {
+        let shows_approved = viewing.with(|v| match v {
+            Some(snap) => snap.event == VersionEvent::Approved,
+            None => approved,
+        });
+        if shows_approved {
+            "Approved for internal use. Not for client distribution."
+        } else {
+            "Draft for attorney review. Not for client distribution."
+        }
     };
     let approval_note = approved
         .then(|| memo.last_approval.clone())
@@ -293,6 +308,9 @@ fn MemoView(
         .filter(|e| !e.comment.trim().is_empty());
     let withdraw = memo.can_withdraw.then(|| (memo.id.clone(), on_changed));
     let download = move || {
+        if !current_shown() {
+            return None;
+        }
         filed.document.get().map(|doc| {
             view! { <a class=BTN href=filed.download_href(&case_id.get_value(), &doc)>"Download"</a> }
         })
@@ -316,6 +334,7 @@ fn MemoView(
                     VersionEvent::RevisionsRequested => "when revisions were requested",
                     VersionEvent::Approved => "approved",
                     VersionEvent::Withdrawn => "withdrawn",
+                    VersionEvent::Started => "when started",
                 }
             );
             let mut shown = memo_sv.get_value();
@@ -325,7 +344,7 @@ fn MemoView(
                 VersionEvent::Sent => MemoStatus::InReview,
                 VersionEvent::RevisionsRequested => MemoStatus::RevisionsRequested,
                 VersionEvent::Approved => MemoStatus::Approved,
-                VersionEvent::Withdrawn => MemoStatus::Draft,
+                VersionEvent::Withdrawn | VersionEvent::Started => MemoStatus::Draft,
             };
             view! {
                 <div class="flex flex-wrap items-center gap-3 rounded-[14px] border border-slate-700 bg-sand-50 px-[18px] py-3 text-[14.5px]" role="status">
@@ -349,8 +368,10 @@ fn MemoView(
 
     view! {
         <PageHeader back_href=back_href(&memo.case_id) back_label=back_label(&memo) actions=Box::new(move || view! {
-            <span class=format!("{MUTED} text-[13.5px]")>{sent_line}</span>
-            {withdraw.map(|(memo_id, on_changed)| view! { <WithdrawButton memo_id=memo_id on_changed=on_changed /> })}
+            <span class="contents" class:hidden=move || !current_shown()>
+                <span class=format!("{MUTED} text-[13.5px]")>{sent_line}</span>
+                {withdraw.map(|(memo_id, on_changed)| view! { <WithdrawButton memo_id=memo_id on_changed=on_changed /> })}
+            </span>
             {download}
         }.into_any())>
             <h1 class=SERIF_H1>{title}</h1>
@@ -358,7 +379,7 @@ fn MemoView(
         </PageHeader>
         <DarkBanner>{banner}</DarkBanner>
         {approval_note.map(|e| view! {
-            <div class="rounded-2xl border border-ok-200 bg-ok-50 px-5 py-3.5 text-ok-700" role="note">
+            <div class="rounded-2xl border border-ok-200 bg-ok-50 px-5 py-3.5 text-ok-700" class:hidden=move || !current_shown() role="note">
                 <p class="font-semibold">{format!("Comment from {}, {}", e.actor_name, when(&e.at))}</p>
                 <p class="mt-1 whitespace-pre-line">{e.comment}</p>
             </div>
@@ -369,10 +390,17 @@ fn MemoView(
         <div class="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
             <div class="flex min-w-0 flex-col gap-4">{main}</div>
             <aside class="flex flex-col gap-3.5 lg:sticky lg:top-4" aria-label="About this memo">
-                {can_review.then(|| view! { <ReviewPanel memo=review_memo on_changed=on_changed /> })}
-                {approved.then(|| view! {
-                    <LockedCard memo=locked_memo filed=filed on_changed=on_changed />
-                    <ChecksCard review=checks />
+                <div class="flex flex-col gap-3.5" class:hidden=move || !current_shown()>
+                    {can_review.then(|| view! { <ReviewPanel memo=review_memo on_changed=on_changed /> })}
+                    {approved.then(|| view! {
+                        <LockedCard memo=locked_memo filed=filed on_changed=on_changed />
+                        <ChecksCard review=checks />
+                    })}
+                </div>
+                {move || viewing.with(|v| {
+                    v.as_ref()
+                        .filter(|snap| !snap.review.marks.is_empty())
+                        .map(|snap| view! { <ChecksCard review=snap.review.clone() heading_id="viewed-checks-h" /> })
                 })}
                 <HistoryCard versions=versions opening=opening on_view=open_version />
             </aside>
