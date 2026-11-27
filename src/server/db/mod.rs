@@ -33,6 +33,7 @@ pub mod email_failures;
 pub mod funding;
 pub mod grants;
 pub mod ids;
+pub mod legal_memos;
 pub mod messages;
 pub mod mfa;
 pub mod organization_properties;
@@ -118,4 +119,12 @@ pub async fn init() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 /// format the browser produces via `state::now_stamp`.
 pub fn now_stamp() -> String {
     chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()
+}
+
+pub fn local_stamp(at: chrono::DateTime<chrono::Utc>) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .from_utc_datetime(&at.naive_utc())
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
 }
